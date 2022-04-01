@@ -54,7 +54,8 @@ new_VertexBuffer(VkBuffer *pBuffer, VkDeviceMemory *pBufferMemory,
   ErrVal vertexBufferCreateResult = new_Buffer_DeviceMemory(
       pBuffer, pBufferMemory, bufferSize, physicalDevice, device,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 
   /* Handle errors */
   if (vertexBufferCreateResult != ERR_OK) {
@@ -72,6 +73,8 @@ new_VertexBuffer(VkBuffer *pBuffer, VkDeviceMemory *pBufferMemory,
 
   return (ERR_OK);
 }
+
+
 
 static void new_ChunkGeometry(             //
     ChunkGeometry *c,                      //
@@ -197,7 +200,8 @@ void wld_new_WorldState(                  //
       &pWorldState->highlightVertexBufferMemory, sizeof(Vertex) * 6,
       physicalDevice, device,
       VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
 
   if (highlightBufferCreateResult != ERR_OK) {
     LOG_ERROR(ERR_LEVEL_FATAL, "failed to create highlight vertex buffer");
@@ -400,7 +404,7 @@ void wld_delete_WorldState( //
   // delete any blocks in the to generate stack
   ivec3_vec_clear(pWorldState->togenerate);
 
-  // go through each 
+  // go through each
 
   // clear the garbage
   wld_clearGarbage(pWorldState);
@@ -437,8 +441,6 @@ void wld_count_vertexBuffers(     //
   if (pWorldState->has_highlight) {
     count++;
   }
-
-
 
   for (uint32_t i = 0; i < ivec3_vec_len(pWorldState->ready); i++) {
     // get coord
@@ -520,7 +522,6 @@ void wld_getVertexBuffers(        //
       count++;
     }
   }
-
 }
 
 void wld_set_center(         //
@@ -542,10 +543,10 @@ void wld_set_center(         //
   }
 }
 
-bool wld_get_block_at( //
-    BlockIndex *pBlock,       //
-    WorldState *pWorldState,  //
-    const ivec3 iBlockCoords  //
+bool wld_get_block_at(       //
+    BlockIndex *pBlock,      //
+    WorldState *pWorldState, //
+    const ivec3 iBlockCoords //
 ) {
   vec3 blockCoords;
   ivec3_to_vec3(blockCoords, iBlockCoords);
@@ -582,10 +583,10 @@ bool wld_get_block_at( //
   return true;
 }
 
-bool wld_set_block_at( //
-    BlockIndex block,         //
-    WorldState *pWorldState,  //
-    const ivec3 iBlockCoords  //
+bool wld_set_block_at(       //
+    BlockIndex block,        //
+    WorldState *pWorldState, //
+    const ivec3 iBlockCoords //
 ) {
   vec3 blockCoords;
   ivec3_to_vec3(blockCoords, iBlockCoords);

@@ -1,38 +1,6 @@
-# Vulkan Voxel Renderer
+# Vulkan Raytraced Voxel Renderer
 
-![Game Screenshot](./screenshots/1.png)
-
-This project is a simple voxel renderer made using Vulkan and C.
-It's a small demo example and not a full game,
-but it successfully demonstrates the basic principles of building texture atlases, chunk generation, and dynamic chunk loading without a game engine
-
-This project's code and assets are 100% public domain, and you can do whatever you like with them.
-
-### Current Features
-* Chunks
-  * Internal faces are culled
-* Infinite terrain
-  * Chunks are loaded and unloaded dynamically
-* Textured blocks
-  * Texture atlas is generated at runtime from the resources in `assets/blocks`
-* Can move camera
-  * Spectator mode (no physics currently)
-
-### Goals
-We will add these later at some point, but they're not present right now:
-
-* Destroying blocks
-* Adding blocks
-* Being able to walk around without flying
-* Entities
-* Block picker
-
-### Non-Goals
-These are pretty cool features for a game, but they aren't really core to the concept of a voxel renderer.
-
-* Lighting
-* Water / Transparency
-* Inventory support
+Not done yet.
 
 ## How to build
 
