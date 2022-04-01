@@ -20,7 +20,6 @@
 #include "errors.h"
 #include "vertex.h"
 
-
 /// Creates a new VkInstance with the specified extensions and layers
 /// --- PRECONDITIONS ---
 /// * `ppEnabledExtensionNames` must be a pointer to at least
@@ -32,8 +31,8 @@
 /// * Returns the error status
 /// * If enableGLFWRequiredExtensions, then all extensions needed by GLFW will
 /// be enabled
-/// * Creates a new debug callback that prints validation layer errors to stdout or
-/// stderr, depending on their severity
+/// * Creates a new debug callback that prints validation layer errors to stdout
+/// or stderr, depending on their severity
 /// * on success, `*pCallback` is set to a valid callback
 /// --- PANICS ---
 /// Panics if memory allocation fails
@@ -108,9 +107,8 @@ ErrVal getPhysicalDevice(VkPhysicalDevice *pDevice, const VkInstance instance);
 void new_RayTracingEnabledDevice(              //
     VkDevice *pDevice,                         //
     const VkPhysicalDevice physicalDevice,     //
-    const uint32_t graphicsFamilyIndex,        //
-    const uint32_t computeFamilyIndex,         //
-    const uint32_t presentFamilyIndex,         //
+    const uint32_t queueFamilyIndex,           //
+    const uint32_t queueCount,                 //
     const uint32_t enabledExtensionCount,      //
     const char *const *ppEnabledExtensionNames //
 );
@@ -126,37 +124,24 @@ void delete_Device(VkDevice *pDevice);
 
 /// Gets the first queue family index with the stated capabilities
 /// --- PRECONDITIONS ---
-/// `pQueueFamilyIndex` must be a valid pointer or NULL
-/// `pQueueCount` must be a valid pointer or NULL
-/// `device` must be created by getPhysicalDevice
-/// --- POSTCONDITIONS ---
-/// * if not NULL, sets `*pQueueFamilyIndex` contains the index of the first
-/// queue family supporting `bit`
-/// * if not NULL, sets `*pQueueCount` contains the number
-/// of queues in the first queue family supporting `bit`
-/// * if no queue family was found to support the bit, then returns
-/// ERR_NOTSUPPORTED
-/// * otherwise returns ERR_OK
-ErrVal getQueueFamilyIndexByCapability( //
-    uint32_t *pQueueFamilyIndex,        //
-    uint32_t *pQueueCount,              //
-    const VkPhysicalDevice device,      //
-    const VkQueueFlags bit              //
-);
-
-/// Gets the first queue family index which can support rendering to `surface`
-/// --- PRECONDITIONS ---
-/// * `pQueueFamilyIndex` must be a valid pointer
+/// * `pQueueFamilyIndex` must be a valid pointer or NULL
+/// * `pQueueCount` must be a valid pointer or NULL
 /// * `device` must be created by getPhysicalDevice
-/// * `surface` must be a valid surface from the same instance as
-/// `physicalDevice`
+/// * `surface` must be VK_NULL_HANDLE or a valid surface from the same instance
+/// as `physicalDevice`
 /// --- POSTCONDITIONS ---
-/// * returns error status.
-/// * on success, sets `*pQueueFamilyIndex` contains the index of the first
-/// queue supporting presenting to `surface`
-ErrVal getPresentQueueFamilyIndex(         //
+/// * if no family is found that has at least `minQueueCount` queues, supports
+/// `bits`, and can present to `surface`, then ERR_NOTSUPPORTED is returned.
+/// * otherwise, if a family is found, returns ERR_OK
+/// * if not NULL, sets `*pQueueFamilyIndex` to this queue family index
+/// * if not NULL, sets `*pQueueCount` to the number of queues supported by this
+/// queue family index
+ErrVal getQueueFamilyIndex(                //
     uint32_t *pQueueFamilyIndex,           //
+    uint32_t *pQueueCount,                 //
     const VkPhysicalDevice physicalDevice, //
+    const VkQueueFlags bits,               //
+    const uint32_t minQueueCount,          //
     const VkSurfaceKHR surface             //
 );
 
@@ -204,8 +189,8 @@ ErrVal getPreferredSurfaceFormat(VkSurfaceFormatKHR *pSurfaceFormat,
 /// --- POSTCONDITIONS ---
 /// * returns error status
 /// * on success, `*pSwapchain` is set to a new swapchain
-/// * on success, `*pSwapchainImageCount` is set to the number of images in the
-/// swapchain
+/// * on success, `*pSwapchainImageCount` is set to the number of images in
+/// the swapchain
 /// --- CLEANUP ---
 /// * call `delete_Swapchain` to free resources associated with this swapchain
 ErrVal new_Swapchain(                       //
@@ -216,16 +201,15 @@ ErrVal new_Swapchain(                       //
     const VkPhysicalDevice physicalDevice,  //
     const VkDevice device,                  //
     const VkSurfaceKHR surface,             //
-    const VkExtent2D extent,                //
-    const uint32_t graphicsIndex,           //
-    const uint32_t presentIndex             //
+    const VkExtent2D extent                 //
 );
 
 /// Deletes a swapchain created from new_Swapchain
 /// --- PRECONDITIONS ---
 /// * `pSwapchain` must be a valid pointer to a swapchain created from
 /// new_Swapchain
-/// * `device` must be the logical device from which `*pSwapchain` was allocated
+/// * `device` must be the logical device from which `*pSwapchain` was
+/// allocated
 /// --- POSTCONDITIONS ---
 /// * Resources associated with `*pSwapchain` have been released
 /// * `*pSwapchain` is no longer a valid swapchain
@@ -276,7 +260,8 @@ void new_ImageView(           //
 /// --- PRECONDITIONS ---
 /// * `pImageView` must be a valid pointer to a imageView created from
 /// new_ImageView
-/// * `device` must be the logical device from which `*pImageView` was allocated
+/// * `device` must be the logical device from which `*pImageView` was
+/// allocated
 /// --- POSTCONDITIONS ---
 /// * Resources associated with `*pImageView` have been released
 /// * `*pImageView` is no longer a valid imageView

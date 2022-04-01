@@ -1,4 +1,4 @@
-TARGET_EXEC ?= vulkan-triangle-v3
+TARGET_EXEC ?= vulkan-raytraced-voxels
 
 BUILD_DIR ?= ./obj
 SRC_DIRS ?= src vendor

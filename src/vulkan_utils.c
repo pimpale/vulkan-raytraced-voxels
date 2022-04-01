@@ -171,17 +171,6 @@ void delete_Instance(VkInstance *pInstance) {
 
 /**
  * Requires the debug utils extension
- *
- * Creates a new debug callback that prints validation layer errors to stdout or
- * stderr, depending on their severity
- */
-ErrVal new_DebugCallback(VkDebugUtilsMessengerEXT *pCallback,
-                         const VkInstance instance) {
-  return (ERR_NOTSUPPORTED);
-}
-
-/**
- * Requires the debug utils extension
  * Deletes callback created in new_DebugCallback
  */
 void delete_DebugCallback(VkDebugUtilsMessengerEXT *pCallback,
@@ -216,18 +205,9 @@ ErrVal getPhysicalDevice(VkPhysicalDevice *pDevice, const VkInstance instance) {
     PANIC();
   }
 
-  VkPhysicalDeviceProperties deviceProperties;
-  VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
-  for (uint32_t i = 0; i < deviceCount; i++) {
-    /* TODO confirm it has required properties */
-    vkGetPhysicalDeviceProperties(arr[i], &deviceProperties);
-    uint32_t ret = getQueueFamilyIndexByCapability(
-        NULL, NULL, arr[i], VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
-    if (ret == VK_SUCCESS) {
-      selectedDevice = arr[i];
-      break;
-    }
-  }
+  // TODO: this just selects the first gpu
+  VkPhysicalDevice selectedDevice = arr[0];
+
   free(arr);
   if (selectedDevice == VK_NULL_HANDLE) {
     LOG_ERROR(ERR_LEVEL_WARN, "no suitable Vulkan device found");
@@ -250,12 +230,17 @@ void delete_Device(VkDevice *pDevice) {
  * Sets deviceQueueIndex to queue family index corresponding to the bit passed
  * in for the device
  */
-ErrVal getQueueFamilyIndexByCapability(uint32_t *pQueueFamilyIndex,
-                                       uint32_t *pQueueCount,
-                                       const VkPhysicalDevice device,
-                                       const VkQueueFlags bit) {
+ErrVal getQueueFamilyIndex(                //
+    uint32_t *pQueueFamilyIndex,           //
+    uint32_t *pQueueCount,                 //
+    const VkPhysicalDevice physicalDevice, //
+    const VkQueueFlags bits,               //
+    const uint32_t minQueueCount,          //
+    const VkSurfaceKHR surface             //
+) {
   uint32_t queueFamilyCount = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, NULL);
+  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
+                                           NULL);
   if (queueFamilyCount == 0) {
     LOG_ERROR(ERR_LEVEL_WARN, "no device queues found");
     return (ERR_NOTSUPPORTED);
@@ -267,11 +252,26 @@ ErrVal getQueueFamilyIndexByCapability(uint32_t *pQueueFamilyIndex,
     LOG_ERROR(ERR_LEVEL_FATAL, "Failed to get device queue index: no memory");
     PANIC();
   }
-  vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount,
+  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
                                            pFamilyProperties);
   for (uint32_t i = 0; i < queueFamilyCount; i++) {
-    if (pFamilyProperties[i].queueCount > 0 &&
-        ((pFamilyProperties[0].queueFlags & bit) == bit)) {
+
+    VkBool32 surfaceSupport = VK_TRUE;
+    if (surface != VK_NULL_HANDLE) {
+      VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(
+          physicalDevice, i, surface, &surfaceSupport);
+
+      if (res != VK_SUCCESS) {
+        LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "Failed to check support present: %s",
+                       vkstrerror(res));
+        PANIC();
+      }
+    }
+
+    bool hasQueues = pFamilyProperties[i].queueCount >= minQueueCount;
+    bool matchesBits = (pFamilyProperties[0].queueFlags & bits) == bits;
+
+    if (surfaceSupport && hasQueues && matchesBits) {
       if (pQueueFamilyIndex != NULL) {
         *pQueueFamilyIndex = i;
       }
@@ -287,47 +287,11 @@ ErrVal getQueueFamilyIndexByCapability(uint32_t *pQueueFamilyIndex,
   return (ERR_NOTSUPPORTED);
 }
 
-ErrVal getPresentQueueFamilyIndex(uint32_t *pQueueFamilyIndex,
-                                  const VkPhysicalDevice physicalDevice,
-                                  const VkSurfaceKHR surface) {
-  uint32_t queueFamilyCount = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
-                                           NULL);
-  if (queueFamilyCount == 0) {
-    LOG_ERROR(ERR_LEVEL_WARN, "no queues found");
-    return (ERR_NOTSUPPORTED);
-  }
-  VkQueueFamilyProperties *arr = (VkQueueFamilyProperties *)malloc(
-      queueFamilyCount * sizeof(VkQueueFamilyProperties));
-  if (!arr) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "Failed to get present queue index: %s",
-                   strerror(errno));
-    PANIC();
-  }
-  vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
-                                           arr);
-  for (uint32_t i = 0; i < queueFamilyCount; i++) {
-    VkBool32 surfaceSupport;
-    VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(
-        physicalDevice, i, surface, &surfaceSupport);
-    if (res == VK_SUCCESS && surfaceSupport) {
-      *pQueueFamilyIndex = i;
-      free(arr);
-      return (ERR_OK);
-    }
-  }
-  free(arr);
-  return (ERR_NOTSUPPORTED);
-}
-
-
-
 void new_RayTracingEnabledDevice(              //
     VkDevice *pDevice,                         //
     const VkPhysicalDevice physicalDevice,     //
-    const uint32_t graphicsFamilyIndex,        //
-    const uint32_t computeFamilyIndex,         //
-    const uint32_t presentFamilyIndex,         //
+    const uint32_t queueFamilyIndex,           //
+    const uint32_t queueCount,                 //
     const uint32_t enabledExtensionCount,      //
     const char *const *ppEnabledExtensionNames //
 ) {
@@ -359,15 +323,23 @@ void new_RayTracingEnabledDevice(              //
     index++;
   }
 
-  float pQueuePriorities[1] = {1.0f};
+  float *pQueuePriorities = malloc(queueCount * sizeof(float));
+  if (pQueuePriorities == NULL) {
+    LOG_ERROR(ERR_LEVEL_FATAL, "create device: failed to allocate memory");
+    PANIC();
+  }
+  // set equal priorities to each queue
+  for (uint32_t i = 0; i < queueCount; i++) {
+    pQueuePriorities[i] = 1.0f;
+  }
 
   VkDeviceQueueCreateInfo pQueueCreateInfos[1] = {0};
   // graphics
   pQueueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
   pQueueCreateInfos[0].pNext = NULL;
   pQueueCreateInfos[0].flags = 0;
-  pQueueCreateInfos[0].queueFamilyIndex = graphicsFamilyIndex;
-  pQueueCreateInfos[0].queueCount = 1;
+  pQueueCreateInfos[0].queueFamilyIndex = queueFamilyIndex;
+  pQueueCreateInfos[0].queueCount = queueCount;
   pQueueCreateInfos[0].pQueuePriorities = pQueuePriorities;
 
   VkPhysicalDeviceBufferDeviceAddressFeaturesEXT bufferDeviceAddressFeatures = {
@@ -443,8 +415,7 @@ ErrVal new_Swapchain(VkSwapchainKHR *pSwapchain, uint32_t *pImageCount,
                      const VkSurfaceFormatKHR surfaceFormat,
                      const VkPhysicalDevice physicalDevice,
                      const VkDevice device, const VkSurfaceKHR surface,
-                     const VkExtent2D extent, const uint32_t graphicsIndex,
-                     const uint32_t presentIndex) {
+                     const VkExtent2D extent) {
   VkSurfaceCapabilitiesKHR capabilities;
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface,
                                             &capabilities);
@@ -460,17 +431,7 @@ ErrVal new_Swapchain(VkSwapchainKHR *pSwapchain, uint32_t *pImageCount,
   createInfo.imageExtent = extent;
   createInfo.imageArrayLayers = 1;
   createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-  uint32_t queueFamilyIndices[] = {graphicsIndex, presentIndex};
-  if (graphicsIndex != presentIndex) {
-    createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-    createInfo.queueFamilyIndexCount = 2;
-    createInfo.pQueueFamilyIndices = queueFamilyIndices;
-  } else {
-    createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    createInfo.queueFamilyIndexCount = 0;  /* Optional */
-    createInfo.pQueueFamilyIndices = NULL; /* Optional */
-  }
+  createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
   createInfo.preTransform = capabilities.currentTransform;
   createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;

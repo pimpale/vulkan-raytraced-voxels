@@ -8,7 +8,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-#define APPNAME "BlockRender"
+#define APPNAME "VulkanRaytracedRenderer"
 
 #include "block.h"
 #include "camera.h"
@@ -30,9 +30,7 @@ typedef struct {
   GLFWwindow *pWindow;
   VkSurfaceKHR surface;
   VkSurfaceFormatKHR surfaceFormat;
-  uint32_t graphicsIndex;
-  uint32_t computeIndex;
-  uint32_t presentIndex;
+  uint32_t queueFamilyIndex;
   VkQueue graphicsQueue;
   VkQueue computeQueue;
   VkQueue presentQueue;
@@ -89,28 +87,43 @@ static void new_AppGraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
   glfwCreateWindowSurface(pGlobal->instance, pGlobal->pWindow, NULL,
                           &pGlobal->surface);
 
-  /* get physical pGlobal->device */
+  // get physical pGlobal->device
   getPhysicalDevice(&pGlobal->physicalDevice, pGlobal->instance);
+
+  // get the queue family index
+  {
+    ErrVal ret = getQueueFamilyIndex(
+        &pGlobal->queueFamilyIndex, NULL, pGlobal->physicalDevice,
+        VK_QUEUE_COMPUTE_BIT | VK_QUEUE_GRAPHICS_BIT, 3, pGlobal->surface);
+    if (ret != ERR_OK) {
+      LOG_ERROR(
+          ERR_LEVEL_FATAL,
+          "failed to find a suitable queue family in the selected device");
+      PANIC();
+    }
+  }
 
   // we want to use swapchains to reduce tearing
   // all the raytracing extensions are added by the method itself
   const uint32_t deviceExtensionCount = 1;
   const char *ppDeviceExtensionNames[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
   // create pGlobal->device
   new_RayTracingEnabledDevice(&pGlobal->device, pGlobal->physicalDevice,
-                             pGlobal->graphicsIndex,
-                             pGlobal->computeIndex,
-                             pGlobal->presentIndex,
-                             deviceExtensionCount,
-                             ppDeviceExtensionNames);
+                              pGlobal->queueFamilyIndex, 3,
+                              deviceExtensionCount, ppDeviceExtensionNames);
 
   // create queues
-  getQueue(&pGlobal->graphicsQueue, pGlobal->device, pGlobal->graphicsIndex, 0);
-  getQueue(&pGlobal->presentQueue, pGlobal->device, pGlobal->presentIndex, 0);
+  getQueue(&pGlobal->graphicsQueue, pGlobal->device, pGlobal->queueFamilyIndex,
+           0);
+  getQueue(&pGlobal->computeQueue, pGlobal->device, pGlobal->queueFamilyIndex,
+           1);
+  getQueue(&pGlobal->presentQueue, pGlobal->device, pGlobal->queueFamilyIndex,
+           2);
 
   // We can create command buffers from the command pool
   new_CommandPool(&pGlobal->commandPool, pGlobal->device,
-                  pGlobal->graphicsIndex);
+                  pGlobal->queueFamilyIndex);
 
   // get preferred format of screen
   getPreferredSurfaceFormat(&pGlobal->surfaceFormat, pGlobal->physicalDevice,
@@ -255,9 +268,7 @@ static void new_AppGraphicsWindowState(    //
       pGlobal->physicalDevice,       //
       pGlobal->device,               //
       pGlobal->surface,              //
-      swapchainExtent,               //
-      pGlobal->graphicsIndex,        //
-      pGlobal->presentIndex          //
+      swapchainExtent               //
   );
 
   // there are swapchainImageCount swapchainImages
