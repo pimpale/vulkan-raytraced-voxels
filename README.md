@@ -1,6 +1,10 @@
 # Vulkan Raytraced Voxel Renderer
 
 Not done yet.
+It turns out that you can't enable the raytracing vulkan layers
+when linking address sanitizer.
+
+It fails on createDevice.
 
 ## How to build
 
