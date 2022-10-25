@@ -30,14 +30,3 @@ Example:
 $ convert up.ff up.png
 ```
 
-## Credits and Acknowledgments
-Part of this project is based upon <https://vulkan-tutorial.com>.
-
-I also referenced my prior example project: <https://github.com/pimpale/vulkan-triangle-v1>
-
-### External Libraries
-* `linmath.h`, which can be found at <https://github.com/datenwolf/linmath.h>
-* `hashmap.c`, which can be found at <https://github.com/tidwall/hashmap.c>
-* `open-simplex-noise.h`, which can be found at <https://github.com/smcameron/open-simplex-noise-in-c>
-* `threadpool.h`, which can be found at <https://github.com/mbrossard/threadpool>
-

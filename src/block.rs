@@ -1,44 +1,16 @@
-#include "block.h"
+use std::{io, fs};
+use std::collections::HashMap;
 
-#include "errors.h"
+const IMG_HEIGHT: i32 = 16;
+const IMG_WIDTH: i32 = 16;
 
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <farbfeld.h>
-
-// overwrites the texture atlas with bmp data
-static void overwriteRectBmp(uint8_t *rgbaBuffer,     //
-                             uint32_t bufferWidthPx,  //
-                             uint32_t bufferHeightPx, //
-                             uint32_t xoff,           //
-                             uint32_t yoff,           //
-                             const farbfeld_img *src  //
-) {
-  uint32_t xsize = src->xsize;
-  uint32_t ysize = src->ysize;
-
-  // prevent overflow
-  assert(xoff + xsize <= bufferWidthPx);
-  assert(yoff + ysize <= bufferHeightPx);
-
-  for (uint32_t y = 0; y < ysize; y++) {
-    uint32_t bufY = y + yoff;
-    for (uint32_t x = 0; x < xsize; x++) {
-      // calculate position in x buffer
-      uint32_t bufX = x + xoff;
-
-      // calculate pixel index in buffer
-      uint32_t dstPxIndex = bufY * bufferWidthPx + bufX;
-      uint32_t srcPxIndex = y * xsize + x;
-      // set colors
-      rgbaBuffer[dstPxIndex * 4 + 0] = src->data[srcPxIndex * 4 + 0] / 256;
-      rgbaBuffer[dstPxIndex * 4 + 1] = src->data[srcPxIndex * 4 + 1] / 256;
-      rgbaBuffer[dstPxIndex * 4 + 2] = src->data[srcPxIndex * 4 + 2] / 256;
-      rgbaBuffer[dstPxIndex * 4 + 3] = src->data[srcPxIndex * 4 + 3] / 256;
-    }
-  }
+pub enum BlockFaceKind {
+  Down = 1,
+  Up = 2,
+  Left = 3,
+  Right = 4,
+  Back = 5,
+  Front = 6,
 }
 
 static void writePicTexAtlas(                       //
@@ -110,10 +82,15 @@ static void writePicTexAtlas(                       //
   free_farbfeld_img(&img);
 }
 
-void block_buildTextureAtlas(                       //
-    uint8_t pTextureAtlas[BLOCK_TEXTURE_ATLAS_LEN], //
-    const char *assetPath                           //
-) {
+pub fn build_texture_atlas<P>(dir:P) -> Result<HashMap<String, BlockTextures>, io::Error> {
+
+  for maybe_block_path in fs::read_dir(dir)? {
+        let block_path = block_path?;
+        
+
+  }
+
+
   for (BlockIndex i = 0; i < BLOCKS_LEN; i++) {
     // don't need to get texture for transparent blocks
     if (BLOCKS[i].transparent) {

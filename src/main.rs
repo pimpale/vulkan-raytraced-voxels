@@ -1,129 +1,107 @@
-#include <errno.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+mod block;
+mod camera;
+mod utils;
+mod vulkan_utils;
+mod world;
+mod errors;
 
-#include <vulkan/vulkan.h>
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
-#define APPNAME "VulkanRaytracedRenderer"
-
-#include "block.h"
-#include "camera.h"
-#include "utils.h"
-#include "vulkan_utils.h"
-#include "world.h"
-
-#include "errors.h"
-
-#define WINDOW_HEIGHT 500
-#define WINDOW_WIDTH 500
-#define MAX_FRAMES_IN_FLIGHT 2
+const APPNAME:&str= "BlockRender";
+const WINDOW_HEIGHT:i32 = 500;
+const WINDOW_WIDTH:i32 = 500;
+const MAX_FRAMES_IN_FLIGHT:i32 = 2;
 
 // contins state associated with the vulkan instance
-typedef struct {
-  VkInstance instance;
-  VkDebugUtilsMessengerEXT callback;
-  VkPhysicalDevice physicalDevice;
-  GLFWwindow *pWindow;
-  VkSurfaceKHR surface;
-  VkSurfaceFormatKHR surfaceFormat;
-  uint32_t queueFamilyIndex;
-  VkQueue graphicsQueue;
-  VkQueue computeQueue;
-  VkQueue presentQueue;
-  VkDevice device;
-  VkCommandPool commandPool;
+struct AppGraphicsGlobalState{
+  instance:VkInstance ,
+  callback:VkDebugUtilsMessengerEXT ,
+  physicalDevice:VkPhysicalDevice ,
+  surface:VkSurfaceKHR ,
+  surfaceFormat:VkSurfaceFormatKHR ,
+  graphicsIndex:uint32_t ,
+  graphicsQueueCount:uint32_t ,
+  presentIndex:uint32_t ,
+  graphicsQueue:VkQueue ,
+  presentQueue:VkQueue ,
+  device:VkDevice ,
+  commandPool:VkCommandPool ,
   // shaders, we need them to recreate the graphics pipeline
-  VkShaderModule fragShaderModule;
-  VkShaderModule vertShaderModule;
-  VkRenderPass renderPass;
-  VkPipelineLayout graphicsPipelineLayout;
-  VkDescriptorSetLayout graphicsDescriptorSetLayout;
+  fragShaderModule: VkShaderModule ,
+  vertShaderModule: VkShaderModule ,
+  renderPass: VkRenderPass ,
+  graphicsPipelineLayout: VkPipelineLayout ,
+  graphicsDescriptorSetLayout: VkDescriptorSetLayout ,
   // descriptor pool stuff
-  VkDescriptorPool graphicsDescriptorPool;
-  VkDescriptorSet graphicsDescriptorSet;
-  VkImage textureAtlasImage;
-  VkDeviceMemory textureAtlasImageMemory;
-  VkImageView textureAtlasImageView;
-  VkSampler textureAtlasSampler;
-  VkCommandBuffer pVertexDisplayCommandBuffers[MAX_FRAMES_IN_FLIGHT];
-  VkSemaphore pImageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
-  VkSemaphore pRenderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
-  VkFence pInFlightFences[MAX_FRAMES_IN_FLIGHT];
+  graphicsDescriptorPool: VkDescriptorPool ,
+  graphicsDescriptorSet: VkDescriptorSet ,
+  textureAtlasImage: VkImage ,
+  textureAtlasImageMemory: VkDeviceMemory ,
+  textureAtlasImageView: VkImageView ,
+  textureAtlasSampler: VkSampler ,
+  pVertexDisplayCommandBuffers: [VkCommandBuffer; MAX_FRAMES_IN_FLIGHT] ,
+  pImageAvailableSemaphores: [VkSemaphore; MAX_FRAMES_IN_FLIGHT] ,
+  pRenderFinishedSemaphores: [VkSemaphore; MAX_FRAMES_IN_FLIGHT] ,
+  pInFlightFences: [VkFence; MAX_FRAMES_IN_FLIGHT] ,
   // this number counts which frame we're on
   // up to MAX_FRAMES_IN_FLIGHT, at whcich points it resets to 0
-  uint32_t currentFrame;
-} AppGraphicsGlobalState;
+  currentFrame: usize,
+}
 
 static void new_AppGraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
   glfwInit();
 
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-  pGlobal->pWindow =
-      glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, APPNAME, NULL, NULL);
+  const uint32_t validationLayerCount = 1;
+  const char *ppValidationLayerNames[1] = {"VK_LAYER_KHRONOS_validation"};
+
+  /* Create pGlobal->instance */
+  new_Instance(&pGlobal->instance, validationLayerCount, ppValidationLayerNames,
+               0, NULL, true, true, APPNAME);
+
+  /* Enable vulkan logging to stdout */
+  new_DebugCallback(&pGlobal->callback, pGlobal->instance);
+
+  /* get physical pGlobal->device */
+  getPhysicalDevice(&pGlobal->physicalDevice, pGlobal->instance);
+
+  /* Create window and pGlobal->surface */
+  new_GlfwWindow(&pGlobal->pWindow, APPNAME,
+                 (VkExtent2D){.width = WINDOW_WIDTH, .height = WINDOW_HEIGHT});
 
   // configure glfw
   glfwSetInputMode(pGlobal->pWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
   glfwSetInputMode(pGlobal->pWindow, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
 
-  const uint32_t validationLayerCount = 1;
-  const char *ppValidationLayerNames[1] = {"VK_LAYER_KHRONOS_validation"};
-
-  const uint32_t enabledExtensionCount = 1;
-  const char *ppEnabledExtensionNames[1] = {
-      VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME};
-
-  /* Create pGlobal->instance */
-  new_Instance(&pGlobal->instance, &pGlobal->callback, validationLayerCount,
-               ppValidationLayerNames, enabledExtensionCount,
-               ppEnabledExtensionNames, true, APPNAME);
-
   new_SurfaceFromGLFW(&pGlobal->surface, pGlobal->pWindow, pGlobal->instance);
 
-  glfwCreateWindowSurface(pGlobal->instance, pGlobal->pWindow, NULL,
-                          &pGlobal->surface);
-
-  // get physical pGlobal->device
-  getPhysicalDevice(&pGlobal->physicalDevice, pGlobal->instance);
-
-  // get the queue family index
+  /* find queues on graphics pGlobal->device */
   {
-    ErrVal ret = getQueueFamilyIndex(
-        &pGlobal->queueFamilyIndex, NULL, pGlobal->physicalDevice,
-        VK_QUEUE_COMPUTE_BIT | VK_QUEUE_GRAPHICS_BIT, 3, pGlobal->surface);
-    if (ret != ERR_OK) {
-      LOG_ERROR(
-          ERR_LEVEL_FATAL,
-          "failed to find a suitable queue family in the selected device");
+    uint32_t ret1 = getQueueFamilyIndexByCapability(
+        &pGlobal->graphicsIndex, &pGlobal->graphicsQueueCount,
+        pGlobal->physicalDevice, VK_QUEUE_GRAPHICS_BIT);
+    uint32_t ret3 = getPresentQueueFamilyIndex(
+        &pGlobal->presentIndex, pGlobal->physicalDevice, pGlobal->surface);
+    /* Panic if indices are unavailable */
+    if (ret1 != VK_SUCCESS || ret3 != VK_SUCCESS) {
+      LOG_ERROR(ERR_LEVEL_FATAL, "unable to acquire indices\n");
       PANIC();
     }
   }
 
   // we want to use swapchains to reduce tearing
-  // all the raytracing extensions are added by the method itself
   const uint32_t deviceExtensionCount = 1;
   const char *ppDeviceExtensionNames[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
   // create pGlobal->device
-  new_RayTracingEnabledDevice(&pGlobal->device, pGlobal->physicalDevice,
-                              pGlobal->queueFamilyIndex, 3,
-                              deviceExtensionCount, ppDeviceExtensionNames);
+  new_Device(&pGlobal->device, pGlobal->physicalDevice, pGlobal->graphicsIndex,
+             pGlobal->graphicsQueueCount, deviceExtensionCount,
+             ppDeviceExtensionNames);
 
   // create queues
-  getQueue(&pGlobal->graphicsQueue, pGlobal->device, pGlobal->queueFamilyIndex,
-           0);
-  getQueue(&pGlobal->computeQueue, pGlobal->device, pGlobal->queueFamilyIndex,
-           1);
-  getQueue(&pGlobal->presentQueue, pGlobal->device, pGlobal->queueFamilyIndex,
-           2);
+  getQueue(&pGlobal->graphicsQueue, pGlobal->device, pGlobal->graphicsIndex, 0);
+  getQueue(&pGlobal->presentQueue, pGlobal->device, pGlobal->presentIndex, 0);
 
   // We can create command buffers from the command pool
   new_CommandPool(&pGlobal->commandPool, pGlobal->device,
-                  pGlobal->queueFamilyIndex);
+                  pGlobal->graphicsIndex);
 
   // get preferred format of screen
   getPreferredSurfaceFormat(&pGlobal->surfaceFormat, pGlobal->physicalDevice,
@@ -268,7 +246,9 @@ static void new_AppGraphicsWindowState(    //
       pGlobal->physicalDevice,       //
       pGlobal->device,               //
       pGlobal->surface,              //
-      swapchainExtent               //
+      swapchainExtent,               //
+      pGlobal->graphicsIndex,        //
+      pGlobal->presentIndex          //
   );
 
   // there are swapchainImageCount swapchainImages
