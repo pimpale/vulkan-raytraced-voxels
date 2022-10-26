@@ -1,8 +1,25 @@
 use std::{io, fs};
-use std::collections::HashMap;
 
-const IMG_HEIGHT: i32 = 16;
-const IMG_WIDTH: i32 = 16;
+pub struct BlockDef {
+    pub transparent: bool,
+    pub name: &'static str,
+}
+
+const DEF_LIST: [BlockDef;5] = [
+    BlockDef { transparent: true, name: "air",},
+    BlockDef { transparent: true, name: "grass",},
+    BlockDef { transparent: true, name: "stone",},
+    BlockDef { transparent: true, name: "soil",},
+];
+
+const FACE_IMG_XSIZE: i32 = 16;
+const FACE_IMG_YSIZE: i32 = 16;
+
+const ATLAS_IMG_XSIZE: i32 = FACE_IMG_XSIZE * 6;
+const ATLAS_IMG_YSIZE: i32 = FACE_IMG_YSIZE * DEF_LIST.len();
+
+const TILE_TEX_XSIZE:f32 = 1.0/6.0;
+const TILE_TEX_YSIZE:f32 = 1.0/(DEF_LIST.len() as f32);
 
 pub enum BlockFaceKind {
   Down = 1,
@@ -13,96 +30,65 @@ pub enum BlockFaceKind {
   Front = 6,
 }
 
-static void writePicTexAtlas(                       //
-    uint8_t pTextureAtlas[BLOCK_TEXTURE_ATLAS_LEN], //
-    BlockIndex index,                               //
-    BlockFaceKind face,                             //
-    const char *assetPath                           //
-) {
-  const char *blockName = BLOCKS[index].name;
 
-  const char *faceFilename;
-  switch (face) {
-  case Block_DOWN:
-    faceFilename = "down.ff";
-    break;
-  case Block_UP:
-    faceFilename = "up.ff";
-    break;
-  case Block_LEFT:
-    faceFilename = "left.ff";
-    break;
-  case Block_RIGHT:
-    faceFilename = "right.ff";
-    break;
-  case Block_BACK:
-    faceFilename = "back.ff";
-    break;
-  case Block_FRONT:
-    faceFilename = "front.ff";
-    break;
-  }
+fn write_pic_tex_atlas<P>(
+    &mut atlas: image::GenericImage,
+    path: P,
+    block_name: &str,
+    face: BlockFaceKind,
+) -> Result<(), image::ImageError>{
+  path.join(match face {
+    BlockFaceKind::Down => "down.ff",
+    BlockFaceKind::Up => "up.ff",
+    BlockFaceKind::Left => "left.ff",
+    BlockFaceKind::Right => "right.ff",
+    BlockFaceKind::Back => "back.ff",
+    BlockFaceKind::Front => "front.ff",
+  });
 
-  // get size of total buffer
-  size_t fileNameSize = strlen(assetPath) + strlen("/") + strlen(blockName) +
-                        strlen("/") + strlen(faceFilename) + 1;
-  char *fileName = malloc(fileNameSize * sizeof(char));
+  let si = atlas.sub_image(0, face*FACE_IMG_YSIZE, FACE_IMG_XSIZE, FACE_IMG_YSIZE);
+  si.copy_from(image::load(pat));
 
-  // build string
-  strcpy(fileName, assetPath);
-  strcat(fileName, "/");
-  strcat(fileName, blockName);
-  strcat(fileName, "/");
-  strcat(fileName, faceFilename);
+  // farbfeld_error e = read_farbfeld_img(&img, fileName);
+  // if (e != farbfeld_OK) {
+  //   LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not open farbfeld file at: %s", fileName);
+  //   PANIC();
+  // }
 
-  farbfeld_img img;
-  farbfeld_error e = read_farbfeld_img(&img, fileName);
-  if (e != farbfeld_OK) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "could not open farbfeld file at: %s", fileName);
-    PANIC();
-  }
+  // // assert dimensions of image
+  // if(img.xsize != BLOCK_TEXTURE_SIZE || img.ysize != BLOCK_TEXTURE_SIZE) {
+  //   LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "expected dimensions %u by %u: %s", BLOCK_TEXTURE_SIZE, BLOCK_TEXTURE_SIZE, fileName);
+  //   PANIC();
+  // }
 
-  // assert dimensions of image
-  if(img.xsize != BLOCK_TEXTURE_SIZE || img.ysize != BLOCK_TEXTURE_SIZE) {
-    LOG_ERROR_ARGS(ERR_LEVEL_FATAL, "expected dimensions %u by %u: %s", BLOCK_TEXTURE_SIZE, BLOCK_TEXTURE_SIZE, fileName);
-    PANIC();
-  }
 
-  free(fileName);
+  // // now write to area
+  // overwriteRectBmp(               //
+  //     pTextureAtlas,              //
+  //     BLOCK_TEXTURE_ATLAS_WIDTH,  //
+  //     BLOCK_TEXTURE_ATLAS_HEIGHT, //
+  //     face * IMG_XSIZE,  //
+  //     index * IMG_YSIZE, //
+  //     &img                        //
+  // );
+  // free_farbfeld_img(&img);
 
-  // now write to area
-  overwriteRectBmp(               //
-      pTextureAtlas,              //
-      BLOCK_TEXTURE_ATLAS_WIDTH,  //
-      BLOCK_TEXTURE_ATLAS_HEIGHT, //
-      face * BLOCK_TEXTURE_SIZE,  //
-      index * BLOCK_TEXTURE_SIZE, //
-      &img                        //
-  );
-  free_farbfeld_img(&img);
+  return Ok(());
 }
 
-pub fn build_texture_atlas<P>(dir:P) -> Result<HashMap<String, BlockTextures>, io::Error> {
-
-  for maybe_block_path in fs::read_dir(dir)? {
-        let block_path = block_path?;
-        
-
-  }
-
-
-  for (BlockIndex i = 0; i < BLOCKS_LEN; i++) {
-    // don't need to get texture for transparent blocks
-    if (BLOCKS[i].transparent) {
-      continue;
-    }
+pub fn build_texture_atlas<P>(dir:P) -> Result<RgbaImage, io::Error> {
+  let mut atlas = RgbaImage::new(32, 32);
+  for BlockDef {transparent, name} in DEF_LIST{
+      if !transparent {
+          let dir
 
     // write all six faces
-    writePicTexAtlas(pTextureAtlas, i, Block_DOWN, assetPath);
-    writePicTexAtlas(pTextureAtlas, i, Block_UP, assetPath);
-    writePicTexAtlas(pTextureAtlas, i, Block_LEFT, assetPath);
-    writePicTexAtlas(pTextureAtlas, i, Block_RIGHT, assetPath);
-    writePicTexAtlas(pTextureAtlas, i, Block_BACK, assetPath);
-    writePicTexAtlas(pTextureAtlas, i, Block_FRONT, assetPath);
+    write_pic_tex_atlas(pTextureAtlas, Block_DOWN, assetPath);
+    write_pic_tex_atlas(pTextureAtlas, Block_UP, assetPath);
+    write_pic_tex_atlas(pTextureAtlas, Block_LEFT, assetPath);
+    write_pic_tex_atlas(pTextureAtlas, Block_RIGHT, assetPath);
+    write_pic_tex_atlas(pTextureAtlas, Block_BACK, assetPath);
+    write_pic_tex_atlas(pTextureAtlas, Block_FRONT, assetPath);
+      }
   }
 }

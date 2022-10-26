@@ -1,3 +1,5 @@
+use ash::vk;
+
 mod block;
 mod camera;
 mod utils;
@@ -12,42 +14,41 @@ const MAX_FRAMES_IN_FLIGHT:i32 = 2;
 
 // contins state associated with the vulkan instance
 struct AppGraphicsGlobalState{
-  instance:VkInstance ,
-  callback:VkDebugUtilsMessengerEXT ,
-  physicalDevice:VkPhysicalDevice ,
-  surface:VkSurfaceKHR ,
-  surfaceFormat:VkSurfaceFormatKHR ,
+  instance:vk::Instance ,
+  callback:vk::DebugUtilsMessengerEXT ,
+  physicalDevice:vk::PhysicalDevice ,
+  surface:vk::SurfaceKHR ,
+  surfaceFormat:vk::SurfaceFormatKHR ,
   graphicsIndex:uint32_t ,
   graphicsQueueCount:uint32_t ,
   presentIndex:uint32_t ,
-  graphicsQueue:VkQueue ,
-  presentQueue:VkQueue ,
-  device:VkDevice ,
-  commandPool:VkCommandPool ,
+  graphicsQueue:vk::Queue ,
+  presentQueue:vk::Queue ,
+  device:vk::Device ,
+  commandPool:vk::CommandPool ,
   // shaders, we need them to recreate the graphics pipeline
-  fragShaderModule: VkShaderModule ,
-  vertShaderModule: VkShaderModule ,
-  renderPass: VkRenderPass ,
-  graphicsPipelineLayout: VkPipelineLayout ,
-  graphicsDescriptorSetLayout: VkDescriptorSetLayout ,
+  fragShaderModule: vk::ShaderModule ,
+  vertShaderModule: vk::ShaderModule ,
+  renderPass: vk::RenderPass ,
+  graphicsPipelineLayout: vk::PipelineLayout ,
+  graphicsDescriptorSetLayout: vk::DescriptorSetLayout ,
   // descriptor pool stuff
-  graphicsDescriptorPool: VkDescriptorPool ,
-  graphicsDescriptorSet: VkDescriptorSet ,
-  textureAtlasImage: VkImage ,
-  textureAtlasImageMemory: VkDeviceMemory ,
-  textureAtlasImageView: VkImageView ,
-  textureAtlasSampler: VkSampler ,
-  pVertexDisplayCommandBuffers: [VkCommandBuffer; MAX_FRAMES_IN_FLIGHT] ,
-  pImageAvailableSemaphores: [VkSemaphore; MAX_FRAMES_IN_FLIGHT] ,
-  pRenderFinishedSemaphores: [VkSemaphore; MAX_FRAMES_IN_FLIGHT] ,
-  pInFlightFences: [VkFence; MAX_FRAMES_IN_FLIGHT] ,
+  graphicsDescriptorPool: vk::DescriptorPool ,
+  graphicsDescriptorSet: vk::DescriptorSet ,
+  textureAtlasImage: vk::Image ,
+  textureAtlasImageMemory: vk::DeviceMemory ,
+  textureAtlasImageView: vk::ImageView ,
+  textureAtlasSampler: vk::Sampler ,
+  pVertexDisplayCommandBuffers: [vk::CommandBuffer; MAX_FRAMES_IN_FLIGHT] ,
+  pImageAvailableSemaphores: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT] ,
+  pRenderFinishedSemaphores: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT] ,
+  pInFlightFences: [vk::Fence; MAX_FRAMES_IN_FLIGHT] ,
   // this number counts which frame we're on
   // up to MAX_FRAMES_IN_FLIGHT, at whcich points it resets to 0
   currentFrame: usize,
 }
 
-static void new_AppGraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
-  glfwInit();
+fn new_AppGraphicsGlobalState() -> AppGraphicsGlobalState {
 
   const uint32_t validationLayerCount = 1;
   const char *ppValidationLayerNames[1] = {"VK_LAYER_KHRONOS_validation"};
@@ -64,7 +65,7 @@ static void new_AppGraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
 
   /* Create window and pGlobal->surface */
   new_GlfwWindow(&pGlobal->pWindow, APPNAME,
-                 (VkExtent2D){.width = WINDOW_WIDTH, .height = WINDOW_HEIGHT});
+                 (vk::Extent2D){.width = WINDOW_WIDTH, .height = WINDOW_HEIGHT});
 
   // configure glfw
   glfwSetInputMode(pGlobal->pWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -135,7 +136,7 @@ static void new_AppGraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
       &pGlobal->textureAtlasImage,                       //
       &pGlobal->textureAtlasImageMemory,                 //
       textureAtlasData,                                  //
-      (VkExtent2D){.height = BLOCK_TEXTURE_ATLAS_HEIGHT, //
+      (vk::Extent2D){.height = BLOCK_TEXTURE_ATLAS_HEIGHT, //
                    .width = BLOCK_TEXTURE_ATLAS_WIDTH},  //
       pGlobal->device,                                   //
       pGlobal->physicalDevice,                           //
@@ -217,16 +218,16 @@ static void delete_GraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
 
 // contains state associated with the window that must be resized
 typedef struct {
-  VkSwapchainKHR swapchain;
+  vk::SwapchainKHR swapchain;
   uint32_t swapchainImageCount;
-  VkImage *pSwapchainImages;
-  VkImageView *pSwapchainImageViews;
-  VkDeviceMemory depthImageMemory;
-  VkImage depthImage;
-  VkImageView depthImageView;
-  VkFramebuffer *pSwapchainFramebuffers;
-  VkPipeline graphicsPipeline;
-  VkExtent2D swapchainExtent;
+  vk::Image *pSwapchainImages;
+  vk::ImageView *pSwapchainImageViews;
+  vk::DeviceMemory depthImageMemory;
+  vk::Image depthImage;
+  vk::ImageView depthImageView;
+  vk::Framebuffer *pSwapchainFramebuffers;
+  vk::Pipeline graphicsPipeline;
+  vk::Extent2D swapchainExtent;
 } AppGraphicsWindowState;
 
 // contains the per app state that we don't need to resize
@@ -234,7 +235,7 @@ typedef struct {
 static void new_AppGraphicsWindowState(    //
     AppGraphicsWindowState *pWindow,       //
     const AppGraphicsGlobalState *pGlobal, //
-    const VkExtent2D swapchainExtent       //
+    const vk::Extent2D swapchainExtent       //
 ) {
 
   // Create swap chain
@@ -253,13 +254,13 @@ static void new_AppGraphicsWindowState(    //
 
   // there are swapchainImageCount swapchainImages
   pWindow->pSwapchainImages =
-      malloc(pWindow->swapchainImageCount * sizeof(VkImage));
+      malloc(pWindow->swapchainImageCount * sizeof(vk::Image));
   getSwapchainImages(pWindow->pSwapchainImages, pWindow->swapchainImageCount,
                      pGlobal->device, pWindow->swapchain);
 
   // there are swapchainImageCount swapchainImageViews
   pWindow->pSwapchainImageViews =
-      malloc(pWindow->swapchainImageCount * sizeof(VkImageView));
+      malloc(pWindow->swapchainImageCount * sizeof(vk::ImageView));
   new_SwapchainImageViews(pWindow->pSwapchainImageViews,
                           pWindow->pSwapchainImages,
                           pWindow->swapchainImageCount, pGlobal->device,
@@ -273,7 +274,7 @@ static void new_AppGraphicsWindowState(    //
 
   // create framebuffers to render to
   pWindow->pSwapchainFramebuffers =
-      malloc(pWindow->swapchainImageCount * sizeof(VkFramebuffer));
+      malloc(pWindow->swapchainImageCount * sizeof(vk::Framebuffer));
   new_SwapchainFramebuffers(
       pWindow->pSwapchainFramebuffers, pGlobal->device, pGlobal->renderPass,
       swapchainExtent, pWindow->swapchainImageCount, pWindow->depthImageView,
@@ -316,7 +317,7 @@ delete_AppGraphicsWindowState(AppGraphicsWindowState *pWindow,
   delete_Pipeline(&pWindow->graphicsPipeline, pGlobal->device);
 }
 
-static void drawAppFrame(            //
+fn drawAppFrame(            //
     AppGraphicsWindowState *pWindow, //
     AppGraphicsGlobalState *pGlobal, //
     Camera *pCamera,                 //
@@ -339,7 +340,7 @@ static void drawAppFrame(            //
   // if the window is resized
   if (result == ERR_OUTOFDATE) {
     // get new window size
-    VkExtent2D swapchainExtent;
+    vk::Extent2D swapchainExtent;
     getExtentWindow(&swapchainExtent, pGlobal->pWindow);
 
     // resize camera
@@ -358,7 +359,7 @@ static void drawAppFrame(            //
   uint32_t vertexBufferCount;
   wld_count_vertexBuffers(&vertexBufferCount, pWs);
 
-  VkBuffer *pVertexBuffers = malloc(vertexBufferCount * sizeof(VkBuffer));
+  vk::Buffer *pVertexBuffers = malloc(vertexBufferCount * sizeof(vk::Buffer));
   uint32_t *pVertexCounts = malloc(vertexBufferCount * sizeof(uint32_t));
 
   wld_getVertexBuffers(pVertexBuffers, pVertexCounts, pWs);
@@ -379,7 +380,7 @@ static void drawAppFrame(            //
       pWindow->swapchainExtent,                                     //
       mvp,                                                          //
       pGlobal->graphicsDescriptorSet,                               //
-      (VkClearColorValue){.float32 = {0, 0, 0, 0}}                  //
+      (vk::ClearColorValue){.float32 = {0, 0, 0, 0}}                  //
   );
 
   free(pVertexBuffers);
@@ -400,7 +401,18 @@ static void drawAppFrame(            //
   pGlobal->currentFrame = (pGlobal->currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
-int main(void) {
+fn main(void) {
+  let event_loop = EventLoop::new();
+  let window = WindowBuilder::new()
+      .with_title("Ash - Example")
+      .with_inner_size(winit::dpi::LogicalSize::new(
+          f64::from(WINDOW_WIDTH),
+          f64::from(WINDOW_HEIGHT),
+      ))
+      .build(&event_loop)
+      .unwrap();
+
+
   // initialize global graphics
   AppGraphicsGlobalState global;
   new_AppGraphicsGlobalState(&global);
@@ -419,7 +431,7 @@ int main(void) {
   );
 
   // Set extent (window width and height)
-  VkExtent2D swapchainExtent;
+  vk::Extent2D swapchainExtent;
   getExtentWindow(&swapchainExtent, global.pWindow);
 
   // create camera
