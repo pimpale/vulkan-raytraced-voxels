@@ -1,528 +1,785 @@
-use ash::vk;
-
-mod block;
-mod camera;
-mod utils;
-mod vulkan_utils;
-mod world;
-mod errors;
-
-const APPNAME:&str= "BlockRender";
-const WINDOW_HEIGHT:i32 = 500;
-const WINDOW_WIDTH:i32 = 500;
-const MAX_FRAMES_IN_FLIGHT:i32 = 2;
-
-// contins state associated with the vulkan instance
-struct AppGraphicsGlobalState{
-  instance:vk::Instance ,
-  callback:vk::DebugUtilsMessengerEXT ,
-  physicalDevice:vk::PhysicalDevice ,
-  surface:vk::SurfaceKHR ,
-  surfaceFormat:vk::SurfaceFormatKHR ,
-  graphicsIndex:uint32_t ,
-  graphicsQueueCount:uint32_t ,
-  presentIndex:uint32_t ,
-  graphicsQueue:vk::Queue ,
-  presentQueue:vk::Queue ,
-  device:vk::Device ,
-  commandPool:vk::CommandPool ,
-  // shaders, we need them to recreate the graphics pipeline
-  fragShaderModule: vk::ShaderModule ,
-  vertShaderModule: vk::ShaderModule ,
-  renderPass: vk::RenderPass ,
-  graphicsPipelineLayout: vk::PipelineLayout ,
-  graphicsDescriptorSetLayout: vk::DescriptorSetLayout ,
-  // descriptor pool stuff
-  graphicsDescriptorPool: vk::DescriptorPool ,
-  graphicsDescriptorSet: vk::DescriptorSet ,
-  textureAtlasImage: vk::Image ,
-  textureAtlasImageMemory: vk::DeviceMemory ,
-  textureAtlasImageView: vk::ImageView ,
-  textureAtlasSampler: vk::Sampler ,
-  pVertexDisplayCommandBuffers: [vk::CommandBuffer; MAX_FRAMES_IN_FLIGHT] ,
-  pImageAvailableSemaphores: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT] ,
-  pRenderFinishedSemaphores: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT] ,
-  pInFlightFences: [vk::Fence; MAX_FRAMES_IN_FLIGHT] ,
-  // this number counts which frame we're on
-  // up to MAX_FRAMES_IN_FLIGHT, at whcich points it resets to 0
-  currentFrame: usize,
-}
-
-fn new_AppGraphicsGlobalState() -> AppGraphicsGlobalState {
-
-  const uint32_t validationLayerCount = 1;
-  const char *ppValidationLayerNames[1] = {"VK_LAYER_KHRONOS_validation"};
-
-  /* Create pGlobal->instance */
-  new_Instance(&pGlobal->instance, validationLayerCount, ppValidationLayerNames,
-               0, NULL, true, true, APPNAME);
-
-  /* Enable vulkan logging to stdout */
-  new_DebugCallback(&pGlobal->callback, pGlobal->instance);
-
-  /* get physical pGlobal->device */
-  getPhysicalDevice(&pGlobal->physicalDevice, pGlobal->instance);
-
-  /* Create window and pGlobal->surface */
-  new_GlfwWindow(&pGlobal->pWindow, APPNAME,
-                 (vk::Extent2D){.width = WINDOW_WIDTH, .height = WINDOW_HEIGHT});
-
-  // configure glfw
-  glfwSetInputMode(pGlobal->pWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-  glfwSetInputMode(pGlobal->pWindow, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
-
-  new_SurfaceFromGLFW(&pGlobal->surface, pGlobal->pWindow, pGlobal->instance);
-
-  /* find queues on graphics pGlobal->device */
-  {
-    uint32_t ret1 = getQueueFamilyIndexByCapability(
-        &pGlobal->graphicsIndex, &pGlobal->graphicsQueueCount,
-        pGlobal->physicalDevice, VK_QUEUE_GRAPHICS_BIT);
-    uint32_t ret3 = getPresentQueueFamilyIndex(
-        &pGlobal->presentIndex, pGlobal->physicalDevice, pGlobal->surface);
-    /* Panic if indices are unavailable */
-    if (ret1 != VK_SUCCESS || ret3 != VK_SUCCESS) {
-      LOG_ERROR(ERR_LEVEL_FATAL, "unable to acquire indices\n");
-      PANIC();
-    }
-  }
-
-  // we want to use swapchains to reduce tearing
-  const uint32_t deviceExtensionCount = 1;
-  const char *ppDeviceExtensionNames[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
-  // create pGlobal->device
-  new_Device(&pGlobal->device, pGlobal->physicalDevice, pGlobal->graphicsIndex,
-             pGlobal->graphicsQueueCount, deviceExtensionCount,
-             ppDeviceExtensionNames);
-
-  // create queues
-  getQueue(&pGlobal->graphicsQueue, pGlobal->device, pGlobal->graphicsIndex, 0);
-  getQueue(&pGlobal->presentQueue, pGlobal->device, pGlobal->presentIndex, 0);
-
-  // We can create command buffers from the command pool
-  new_CommandPool(&pGlobal->commandPool, pGlobal->device,
-                  pGlobal->graphicsIndex);
-
-  // get preferred format of screen
-  getPreferredSurfaceFormat(&pGlobal->surfaceFormat, pGlobal->physicalDevice,
-                            pGlobal->surface);
-
-  {
-    uint32_t *fragShaderFileContents;
-    uint32_t fragShaderFileLength;
-    readShaderFile("assets/shaders/shader.frag.spv", &fragShaderFileLength,
-                   &fragShaderFileContents);
-    new_ShaderModule(&pGlobal->fragShaderModule, pGlobal->device,
-                     fragShaderFileLength, fragShaderFileContents);
-    free(fragShaderFileContents);
-  }
-
-  {
-    uint32_t *vertShaderFileContents;
-    uint32_t vertShaderFileLength;
-    readShaderFile("assets/shaders/shader.vert.spv", &vertShaderFileLength,
-                   &vertShaderFileContents);
-    new_ShaderModule(&pGlobal->vertShaderModule, pGlobal->device,
-                     vertShaderFileLength, vertShaderFileContents);
-    free(vertShaderFileContents);
-  }
-
-  // create texture and samplers
-  uint8_t textureAtlasData[BLOCK_TEXTURE_ATLAS_LEN];
-  block_buildTextureAtlas(textureAtlasData, "assets/blocks");
-
-  new_TextureImage(                                      //
-      &pGlobal->textureAtlasImage,                       //
-      &pGlobal->textureAtlasImageMemory,                 //
-      textureAtlasData,                                  //
-      (vk::Extent2D){.height = BLOCK_TEXTURE_ATLAS_HEIGHT, //
-                   .width = BLOCK_TEXTURE_ATLAS_WIDTH},  //
-      pGlobal->device,                                   //
-      pGlobal->physicalDevice,                           //
-      pGlobal->commandPool,                              //
-      pGlobal->graphicsQueue                             //
-  );
-  new_TextureImageView(&pGlobal->textureAtlasImageView,
-                       pGlobal->textureAtlasImage, pGlobal->device);
-  new_TextureSampler(&pGlobal->textureAtlasSampler, pGlobal->device);
-
-  // Create graphics pipeline layout
-  new_VertexDisplayRenderPass(&pGlobal->renderPass, pGlobal->device,
-                              pGlobal->surfaceFormat.format);
-
-  new_VertexDisplayPipelineLayoutDescriptorSetLayout(
-      &pGlobal->graphicsPipelineLayout, &pGlobal->graphicsDescriptorSetLayout,
-      pGlobal->device);
-
-  // create descriptor set using the texture and the descriptor set layout
-  new_VertexDisplayDescriptorPoolAndSet(    //
-      &pGlobal->graphicsDescriptorPool,     //
-      &pGlobal->graphicsDescriptorSet,      //
-      pGlobal->graphicsDescriptorSetLayout, //
-      pGlobal->device,                      //
-      pGlobal->textureAtlasSampler,         //
-      pGlobal->textureAtlasImageView        //
-  );
-
-  new_CommandBuffers(pGlobal->pVertexDisplayCommandBuffers,
-                     MAX_FRAMES_IN_FLIGHT, pGlobal->commandPool,
-                     pGlobal->device);
-
-  // Create image synchronization primitives
-  new_Semaphores(pGlobal->pImageAvailableSemaphores, MAX_FRAMES_IN_FLIGHT,
-                 pGlobal->device);
-  new_Semaphores(pGlobal->pRenderFinishedSemaphores, MAX_FRAMES_IN_FLIGHT,
-                 pGlobal->device);
-  // fences start off signaled
-  new_Fences(pGlobal->pInFlightFences, MAX_FRAMES_IN_FLIGHT, pGlobal->device,
-             true);
-  // set current frame to 0
-  pGlobal->currentFrame = 0;
-}
-
-static void delete_GraphicsGlobalState(AppGraphicsGlobalState *pGlobal) {
-  vkDeviceWaitIdle(pGlobal->device);
-
-  delete_DescriptorPool(&pGlobal->graphicsDescriptorPool, pGlobal->device);
-  delete_TextureSampler(&pGlobal->textureAtlasSampler, pGlobal->device);
-  delete_ImageView(&pGlobal->textureAtlasImageView, pGlobal->device);
-  delete_Image(&pGlobal->textureAtlasImage, pGlobal->device);
-  delete_DeviceMemory(&pGlobal->textureAtlasImageMemory, pGlobal->device);
-
-  delete_ShaderModule(&pGlobal->fragShaderModule, pGlobal->device);
-  delete_ShaderModule(&pGlobal->vertShaderModule, pGlobal->device);
-
-  delete_Fences(pGlobal->pInFlightFences, MAX_FRAMES_IN_FLIGHT,
-                pGlobal->device);
-  delete_Semaphores(pGlobal->pRenderFinishedSemaphores, MAX_FRAMES_IN_FLIGHT,
-                    pGlobal->device);
-  delete_Semaphores(pGlobal->pImageAvailableSemaphores, MAX_FRAMES_IN_FLIGHT,
-                    pGlobal->device);
-
-  delete_CommandBuffers(pGlobal->pVertexDisplayCommandBuffers,
-                        MAX_FRAMES_IN_FLIGHT, pGlobal->commandPool,
-                        pGlobal->device);
-  delete_CommandPool(&pGlobal->commandPool, pGlobal->device);
-
-  delete_VertexDisplayPipelineLayoutDescriptorSetLayout(
-      &pGlobal->graphicsPipelineLayout, &pGlobal->graphicsDescriptorSetLayout,
-      pGlobal->device);
-  delete_RenderPass(&pGlobal->renderPass, pGlobal->device);
-  delete_Device(&pGlobal->device);
-  delete_Surface(&pGlobal->surface, pGlobal->instance);
-  delete_DebugCallback(&pGlobal->callback, pGlobal->instance);
-  delete_Instance(&pGlobal->instance);
-  glfwTerminate();
-}
-
-// contains state associated with the window that must be resized
-typedef struct {
-  vk::SwapchainKHR swapchain;
-  uint32_t swapchainImageCount;
-  vk::Image *pSwapchainImages;
-  vk::ImageView *pSwapchainImageViews;
-  vk::DeviceMemory depthImageMemory;
-  vk::Image depthImage;
-  vk::ImageView depthImageView;
-  vk::Framebuffer *pSwapchainFramebuffers;
-  vk::Pipeline graphicsPipeline;
-  vk::Extent2D swapchainExtent;
-} AppGraphicsWindowState;
-
-// contains the per app state that we don't need to resize
-
-static void new_AppGraphicsWindowState(    //
-    AppGraphicsWindowState *pWindow,       //
-    const AppGraphicsGlobalState *pGlobal, //
-    const vk::Extent2D swapchainExtent       //
-) {
-
-  // Create swap chain
-  new_Swapchain(                     //
-      &pWindow->swapchain,           //
-      &pWindow->swapchainImageCount, //
-      VK_NULL_HANDLE,                //
-      pGlobal->surfaceFormat,        //
-      pGlobal->physicalDevice,       //
-      pGlobal->device,               //
-      pGlobal->surface,              //
-      swapchainExtent,               //
-      pGlobal->graphicsIndex,        //
-      pGlobal->presentIndex          //
-  );
-
-  // there are swapchainImageCount swapchainImages
-  pWindow->pSwapchainImages =
-      malloc(pWindow->swapchainImageCount * sizeof(vk::Image));
-  getSwapchainImages(pWindow->pSwapchainImages, pWindow->swapchainImageCount,
-                     pGlobal->device, pWindow->swapchain);
-
-  // there are swapchainImageCount swapchainImageViews
-  pWindow->pSwapchainImageViews =
-      malloc(pWindow->swapchainImageCount * sizeof(vk::ImageView));
-  new_SwapchainImageViews(pWindow->pSwapchainImageViews,
-                          pWindow->pSwapchainImages,
-                          pWindow->swapchainImageCount, pGlobal->device,
-                          pGlobal->surfaceFormat.format);
-
-  // create depth buffer
-  new_DepthImage(&pWindow->depthImage, &pWindow->depthImageMemory,
-                 swapchainExtent, pGlobal->physicalDevice, pGlobal->device);
-  new_DepthImageView(&pWindow->depthImageView, pGlobal->device,
-                     pWindow->depthImage);
-
-  // create framebuffers to render to
-  pWindow->pSwapchainFramebuffers =
-      malloc(pWindow->swapchainImageCount * sizeof(vk::Framebuffer));
-  new_SwapchainFramebuffers(
-      pWindow->pSwapchainFramebuffers, pGlobal->device, pGlobal->renderPass,
-      swapchainExtent, pWindow->swapchainImageCount, pWindow->depthImageView,
-      pWindow->pSwapchainImageViews);
-
-  // create pipeline
-  new_VertexDisplayPipeline(
-      &pWindow->graphicsPipeline, pGlobal->device, pGlobal->vertShaderModule,
-      pGlobal->fragShaderModule, swapchainExtent, pGlobal->renderPass,
-      pGlobal->graphicsPipelineLayout);
-
-  // remember swapchain extent
-  pWindow->swapchainExtent = swapchainExtent;
-}
-
-static void
-delete_AppGraphicsWindowState(AppGraphicsWindowState *pWindow,
-                              const AppGraphicsGlobalState *pGlobal) {
-  vkDeviceWaitIdle(pGlobal->device);
-
-  // delete framebuffers
-  delete_SwapchainFramebuffers(pWindow->pSwapchainFramebuffers,
-                               pWindow->swapchainImageCount, pGlobal->device);
-  free(pWindow->pSwapchainFramebuffers);
-  // delete swapchain imageviews
-  delete_SwapchainImageViews(pWindow->pSwapchainImageViews,
-                             pWindow->swapchainImageCount, pGlobal->device);
-  free(pWindow->pSwapchainImageViews);
-  // note that we don't have to delete swapchain images since they go away with
-  // the swapchain
-  free(pWindow->pSwapchainImages);
-  // delete swapchain
-  delete_Swapchain(&pWindow->swapchain, pGlobal->device);
-  // delete depth buffer
-  delete_ImageView(&pWindow->depthImageView, pGlobal->device);
-  delete_Image(&pWindow->depthImage, pGlobal->device);
-  delete_DeviceMemory(&pWindow->depthImageMemory, pGlobal->device);
-
-  // delete pipeline
-  delete_Pipeline(&pWindow->graphicsPipeline, pGlobal->device);
-}
-
-fn drawAppFrame(            //
-    AppGraphicsWindowState *pWindow, //
-    AppGraphicsGlobalState *pGlobal, //
-    Camera *pCamera,                 //
-    WorldState *pWs                  //
-) {
-  // wait for last frame to finish
-  waitAndResetFence(pGlobal->pInFlightFences[pGlobal->currentFrame],
-                    pGlobal->device);
-
-  // the imageIndex is the index of the swapchain framebuffer that is
-  // available next
-  uint32_t imageIndex;
-  // this function will return immediately,
-  //  so we use the semaphore to tell us when the image is actually available,
-  //  (ready for rendering to)
-  ErrVal result = getNextSwapchainImage(
-      &imageIndex, pWindow->swapchain, pGlobal->device,
-      pGlobal->pImageAvailableSemaphores[pGlobal->currentFrame]);
-
-  // if the window is resized
-  if (result == ERR_OUTOFDATE) {
-    // get new window size
-    vk::Extent2D swapchainExtent;
-    getExtentWindow(&swapchainExtent, pGlobal->pWindow);
-
-    // resize camera
-    resizeCamera(pCamera, swapchainExtent);
-
-    // destroy and recreate window dependent data
-    delete_AppGraphicsWindowState(pWindow, pGlobal);
-    new_AppGraphicsWindowState(pWindow, pGlobal, swapchainExtent);
-
-    // finally we can retry getting the swapchain
-    getNextSwapchainImage(
-        &imageIndex, pWindow->swapchain, pGlobal->device,
-        pGlobal->pImageAvailableSemaphores[pGlobal->currentFrame]);
-  }
-
-  uint32_t vertexBufferCount;
-  wld_count_vertexBuffers(&vertexBufferCount, pWs);
-
-  vk::Buffer *pVertexBuffers = malloc(vertexBufferCount * sizeof(vk::Buffer));
-  uint32_t *pVertexCounts = malloc(vertexBufferCount * sizeof(uint32_t));
-
-  wld_getVertexBuffers(pVertexBuffers, pVertexCounts, pWs);
-
-  mat4x4 mvp;
-  getMvpCamera(mvp, pCamera);
-
-  // record buffer
-  recordVertexDisplayCommandBuffer(                                 //
-      pGlobal->pVertexDisplayCommandBuffers[pGlobal->currentFrame], //
-      pWindow->pSwapchainFramebuffers[imageIndex],                  //
-      vertexBufferCount,                                            //
-      pVertexBuffers,                                               //
-      pVertexCounts,                                                //
-      pGlobal->renderPass,                                          //
-      pGlobal->graphicsPipelineLayout,                              //
-      pWindow->graphicsPipeline,                                    //
-      pWindow->swapchainExtent,                                     //
-      mvp,                                                          //
-      pGlobal->graphicsDescriptorSet,                               //
-      (vk::ClearColorValue){.float32 = {0, 0, 0, 0}}                  //
-  );
-
-  free(pVertexBuffers);
-  free(pVertexCounts);
-
-  drawFrame(                                                        //
-      pGlobal->pVertexDisplayCommandBuffers[pGlobal->currentFrame], //
-      pWindow->swapchain,                                           //
-      imageIndex,                                                   //
-      pGlobal->pImageAvailableSemaphores[pGlobal->currentFrame],    //
-      pGlobal->pRenderFinishedSemaphores[pGlobal->currentFrame],    //
-      pGlobal->pInFlightFences[pGlobal->currentFrame],              //
-      pGlobal->graphicsQueue,                                       //
-      pGlobal->presentQueue                                         //
-  );
-
-  // increment frame
-  pGlobal->currentFrame = (pGlobal->currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-}
-
-fn main(void) {
-  let event_loop = EventLoop::new();
-  let window = WindowBuilder::new()
-      .with_title("Ash - Example")
-      .with_inner_size(winit::dpi::LogicalSize::new(
-          f64::from(WINDOW_WIDTH),
-          f64::from(WINDOW_HEIGHT),
-      ))
-      .build(&event_loop)
-      .unwrap();
-
-
-  // initialize global graphics
-  AppGraphicsGlobalState global;
-  new_AppGraphicsGlobalState(&global);
-
-  // set up world generation
-  worldgen_state *pWg = new_worldgen_state(42);
-  WorldState ws;
-  wld_new_WorldState(       //
-      &ws,                  //
-      (ivec3){0, 0, 0},     //
-      pWg,                  //
-      global.graphicsQueue, //
-      global.commandPool,   //
-      global.device,        //
-      global.physicalDevice //
-  );
-
-  // Set extent (window width and height)
-  vk::Extent2D swapchainExtent;
-  getExtentWindow(&swapchainExtent, global.pWindow);
-
-  // create camera
-  vec3 loc = {0.0f, 0.0f, 0.0f};
-  Camera camera = new_Camera(loc, swapchainExtent);
-
-  // create window graphics
-  AppGraphicsWindowState window;
-  new_AppGraphicsWindowState(&window, &global, swapchainExtent);
-
-  uint32_t fpsFrameCounter = 0;
-  double fpsStartTime = glfwGetTime();
-
-  uint32_t frameCounter = 0;
-
-  // wait till close
-  while (!glfwWindowShouldClose(global.pWindow)) {
-    // glfw check for new events
-    glfwPollEvents();
-
-    // update camera
-    updateCamera(&camera, global.pWindow);
-
-    // update world
-    wld_update(&ws);
-
-    // project camera
-    ivec3 highlightedIBlockCoords;
-    BlockFaceKind highlightedFace;
-
-    vec3 dir;
-    const vec3 zero = {0.0f, 0.0f, 0.0f};
-    vec3_sub(dir, zero, camera.basis.front);
-    // attempt to get the highlighted face (if any);
-    bool faceIsHighlighted = wld_trace_to_solid(
-        highlightedIBlockCoords, &highlightedFace, camera.pos, dir, 800, &ws);
-    if (faceIsHighlighted) {
-      wld_highlight_face(highlightedIBlockCoords, highlightedFace, &ws);
-      if (glfwGetMouseButton(global.pWindow, GLFW_MOUSE_BUTTON_LEFT) ==
-          GLFW_PRESS) {
-        wld_set_block_at(0, &ws, highlightedIBlockCoords);
-      } else if (glfwGetMouseButton(global.pWindow, GLFW_MOUSE_BUTTON_RIGHT) ==
-                 GLFW_PRESS) {
-        ivec3 toPlaceIBlockCoords;
-        wu_getAdjacentBlock(toPlaceIBlockCoords, highlightedIBlockCoords,
-                            highlightedFace);
-        wld_set_block_at(1, &ws, toPlaceIBlockCoords);
-      }
-    } else {
-      wld_clear_highlight_face(&ws);
+// Copyright (c) 2016 The vulkano developers
+// Licensed under the Apache License, Version 2.0
+// <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT
+// license <LICENSE-MIT or https://opensource.org/licenses/MIT>,
+// at your option. All files in the project carrying such
+// notice may not be copied, modified, or distributed except
+// according to those terms.
+
+use std::sync::Arc;
+use vulkano::acceleration_structure::{
+    AccelerationStructureBuildSizesInfo, AccelerationStructureBuildType,
+};
+use vulkano::pipeline::DynamicState;
+use vulkano::pipeline::graphics::color_blend::ColorBlendAttachmentState;
+use vulkano::{
+    acceleration_structure::{
+        AccelerationStructure, AccelerationStructureBuildGeometryInfo,
+        AccelerationStructureBuildRangeInfo, AccelerationStructureCreateInfo,
+        AccelerationStructureGeometries, AccelerationStructureGeometryInstancesData,
+        AccelerationStructureGeometryInstancesDataType, AccelerationStructureGeometryTrianglesData,
+        AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
+        BuildAccelerationStructureMode, GeometryFlags, GeometryInstanceFlags,
+    },
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
+    command_buffer::{
+        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
+        PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo,
+    },
+    descriptor_set::{
+        allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
+    },
+    device::{
+        physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue,
+        QueueCreateInfo, QueueFlags,
+    },
+    image::{view::ImageView, Image, ImageUsage},
+    instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
+    memory::allocator::{
+        AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator,
+    },
+    pipeline::{
+        graphics::{
+            color_blend::ColorBlendState,
+            input_assembly::InputAssemblyState,
+            multisample::MultisampleState,
+            rasterization::RasterizationState,
+            subpass::PipelineRenderingCreateInfo,
+            vertex_input::{Vertex, VertexDefinition},
+            viewport::{Viewport, ViewportState},
+            GraphicsPipelineCreateInfo,
+        },
+        layout::PipelineDescriptorSetLayoutCreateInfo,
+        GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
+        PipelineShaderStageCreateInfo,
+    },
+    render_pass::AttachmentStoreOp,
+    swapchain::{
+        acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
+    },
+    sync::{self, GpuFuture},
+    DeviceSize, Packed24_8, Validated, Version, VulkanError, VulkanLibrary,
+};
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+
+fn main() {
+    let event_loop = EventLoop::new();
+
+    let library = VulkanLibrary::new().unwrap();
+    let required_extensions = Surface::required_extensions(&event_loop);
+    let instance = Instance::new(
+        library,
+        InstanceCreateInfo {
+            flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+            enabled_extensions: required_extensions,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
+    let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
+
+    let mut device_extensions = DeviceExtensions {
+        khr_acceleration_structure: true,
+        khr_ray_query: true,
+        khr_swapchain: true,
+        ..DeviceExtensions::empty()
+    };
+    let features = Features {
+        acceleration_structure: true,
+        buffer_device_address: true,
+        dynamic_rendering: true,
+        ray_query: true,
+        ..Features::empty()
+    };
+    let (physical_device, queue_family_index) = instance
+        .enumerate_physical_devices()
+        .unwrap()
+        .filter(|p| p.api_version() >= Version::V1_3)
+        .filter(|p| p.supported_extensions().contains(&device_extensions))
+        .filter_map(|p| {
+            p.queue_family_properties()
+                .iter()
+                .enumerate()
+                .position(|(i, q)| {
+                    q.queue_flags.intersects(QueueFlags::GRAPHICS)
+                        && p.surface_support(i as u32, &surface).unwrap_or(false)
+                })
+                .map(|i| (p, i as u32))
+        })
+        .min_by_key(|(p, _)| match p.properties().device_type {
+            PhysicalDeviceType::DiscreteGpu => 0,
+            PhysicalDeviceType::IntegratedGpu => 1,
+            PhysicalDeviceType::VirtualGpu => 2,
+            PhysicalDeviceType::Cpu => 3,
+            PhysicalDeviceType::Other => 4,
+            _ => 5,
+        })
+        .expect("no suitable physical device found");
+
+    println!(
+        "Using device: {} (type: {:?})",
+        physical_device.properties().device_name,
+        physical_device.properties().device_type,
+    );
+
+    let (device, mut queues) = Device::new(
+        physical_device,
+        DeviceCreateInfo {
+            queue_create_infos: vec![QueueCreateInfo {
+                queue_family_index,
+                ..Default::default()
+            }],
+            enabled_extensions: device_extensions,
+            enabled_features: features,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let queue = queues.next().unwrap();
+
+    let (mut swapchain, images) = {
+        let surface_capabilities = device
+            .physical_device()
+            .surface_capabilities(&surface, Default::default())
+            .unwrap();
+        let image_format = device
+            .physical_device()
+            .surface_formats(&surface, Default::default())
+            .unwrap()[0]
+            .0;
+
+        Swapchain::new(
+            device.clone(),
+            surface,
+            SwapchainCreateInfo {
+                min_image_count: surface_capabilities.min_image_count.max(2),
+                image_format,
+                image_extent: window.inner_size().into(),
+                image_usage: ImageUsage::COLOR_ATTACHMENT,
+                composite_alpha: surface_capabilities
+                    .supported_composite_alpha
+                    .into_iter()
+                    .next()
+                    .unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+
+    let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+
+    #[derive(BufferContents, Vertex)]
+    #[repr(C)]
+    struct Vertex {
+        #[format(R32G32_SFLOAT)]
+        position: [f32; 2],
     }
 
-    // check camera chunk location,
-    ivec3 camChunkCoord;
-    blockCoords_to_worldChunkCoords(camChunkCoord, camera.pos);
+    // The quad buffer that covers the entire surface
+    let quad = [
+        Vertex {
+            position: [-1.0, -1.0],
+        },
+        Vertex {
+            position: [-1.0, 1.0],
+        },
+        Vertex {
+            position: [1.0, -1.0],
+        },
+        Vertex {
+            position: [1.0, 1.0],
+        },
+        Vertex {
+            position: [1.0, -1.0],
+        },
+        Vertex {
+            position: [-1.0, 1.0],
+        },
+    ];
+    let quad_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        quad,
+    )
+    .unwrap();
 
-    // if we have a new chunk location, set new chunk center
-    if (!ivec3_eq(ws.centerLoc, camChunkCoord)) {
-      wld_set_center(&ws, camChunkCoord);
+    mod vs {
+        vulkano_shaders::shader! {
+            ty: "vertex",
+            src: r"
+                #version 450
+
+                layout(location = 0) in vec2 position;
+                layout(location = 0) out vec2 out_uv;
+
+                void main() {
+                    gl_Position = vec4(position, 0.0, 1.0);
+                    out_uv = position;
+                }
+            ",
+        }
     }
 
-    // draw frame
-    drawAppFrame(&window, &global, &camera, &ws);
+    mod fs {
+        vulkano_shaders::shader! {
+            ty: "fragment",
+            src: r"
+                #version 460
+                #extension GL_EXT_ray_query : enable
 
-    frameCounter++;
+                layout(location = 0) in vec2 in_uv;
+                layout(location = 0) out vec4 f_color;
 
-    if (frameCounter % 100 == 0) {
-      vkDeviceWaitIdle(global.device);
-      wld_clearGarbage(&ws);
+                layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
+
+                void main() {
+	                float t_min = 0.01;
+	                float t_max = 1000.0;
+	                vec3 origin = vec3(0.0, 0.0, 0.0);
+	                vec3 direction = normalize(vec3(in_uv * 1.0, 1.0));
+
+                    rayQueryEXT ray_query;
+                    rayQueryInitializeEXT(
+                        ray_query,
+                        top_level_acceleration_structure,
+                        gl_RayFlagsTerminateOnFirstHitEXT,
+                        0xFF,
+                        origin,
+                        t_min,
+                        direction,
+                        t_max
+                    );
+                    rayQueryProceedEXT(ray_query);
+
+                    if (rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+                        // miss
+                        f_color = vec4(0.0, 0.0, 0.0, 1.0);
+                    } else {
+                        // hit
+                        f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                    }
+                }
+            ",
+        }
     }
 
-    fpsFrameCounter++;
-    if (fpsFrameCounter >= 100) {
-      double fpsEndTime = glfwGetTime();
-      double fps = fpsFrameCounter / (fpsEndTime - fpsStartTime);
-      LOG_ERROR_ARGS(ERR_LEVEL_INFO, "fps: %f", fps);
-      fpsFrameCounter = 0;
-      fpsStartTime = fpsEndTime;
+    let pipeline = {
+        let vs = vs::load(device.clone())
+            .unwrap()
+            .entry_point("main")
+            .unwrap();
+        let fs = fs::load(device.clone())
+            .unwrap()
+            .entry_point("main")
+            .unwrap();
+        let vertex_input_state = Vertex::per_vertex()
+            .definition(&vs.info().input_interface)
+            .unwrap();
+        let stages = [
+            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(fs),
+        ];
+        let layout = PipelineLayout::new(
+            device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                .into_pipeline_layout_create_info(device.clone())
+                .unwrap(),
+        )
+        .unwrap();
+
+        let subpass = PipelineRenderingCreateInfo {
+            color_attachment_formats: vec![Some(swapchain.image_format())],
+            ..Default::default()
+        };
+        GraphicsPipeline::new(
+            device.clone(),
+            None,
+            GraphicsPipelineCreateInfo {
+                stages: stages.into_iter().collect(),
+                // How vertex data is read from the vertex buffers into the vertex shader.
+                vertex_input_state: Some(vertex_input_state),
+                // How vertices are arranged into primitive shapes.
+                // The default primitive shape is a triangle.
+                input_assembly_state: Some(InputAssemblyState::default()),
+                // How primitives are transformed and clipped to fit the framebuffer.
+                // We use a resizable viewport, set to draw over the entire window.
+                viewport_state: Some(ViewportState::default()),
+                // How polygons are culled and converted into a raster of pixels.
+                // The default value does not perform any culling.
+                rasterization_state: Some(RasterizationState::default()),
+                // How multiple fragment shader samples are converted to a single pixel value.
+                // The default value does not perform any multisampling.
+                multisample_state: Some(MultisampleState::default()),
+                // How pixel values are combined with the values already present in the framebuffer.
+                // The default value overwrites the old value with the new one, without any blending.
+                color_blend_state: Some(ColorBlendState::with_attachment_states(
+                    subpass.color_attachment_formats.len() as u32,
+                    ColorBlendAttachmentState::default(),
+                )),
+                // Dynamic states allows us to specify parts of the pipeline settings when
+                // recording the command buffer, before we perform drawing.
+                // Here, we specify that the viewport should be dynamic.
+                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
+                subpass: Some(subpass.into()),
+                ..GraphicsPipelineCreateInfo::layout(layout)
+            },
+        )
+        .unwrap()
+    };
+
+    let mut viewport = Viewport {
+        offset: [0.0, 0.0],
+        extent: [0.0, 0.0],
+        depth_range: 0.0..=1.0,
+    };
+
+    let mut attachment_image_views = window_size_dependent_setup(&images, &mut viewport);
+    let command_buffer_allocator =
+        StandardCommandBufferAllocator::new(device.clone(), Default::default());
+
+    let (top_level_acceleration_structure, bottom_level_acceleration_structure) = {
+        #[derive(BufferContents, Vertex)]
+        #[repr(C)]
+        struct Vertex {
+            #[format(R32G32B32_SFLOAT)]
+            position: [f32; 3],
+        }
+
+        let vertices = [
+            Vertex {
+                position: [-0.5, -0.25, 1.0],
+            },
+            Vertex {
+                position: [0.0, 0.5, 1.0],
+            },
+            Vertex {
+                position: [0.25, -0.1, 1.0],
+            },
+        ];
+
+        let vertex_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                    | BufferUsage::SHADER_DEVICE_ADDRESS,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            vertices,
+        )
+        .unwrap();
+
+        let bottom_level_acceleration_structure = create_bottom_level_acceleration_structure(
+            memory_allocator.clone(),
+            &command_buffer_allocator,
+            queue.clone(),
+            &[&vertex_buffer],
+        );
+        let top_level_acceleration_structure = create_top_level_acceleration_structure(
+            memory_allocator.clone(),
+            &command_buffer_allocator,
+            queue.clone(),
+            &[&bottom_level_acceleration_structure],
+        );
+
+        (
+            top_level_acceleration_structure,
+            bottom_level_acceleration_structure,
+        )
+    };
+
+    let descriptor_set_allocator =
+        StandardDescriptorSetAllocator::new(device.clone(), Default::default());
+
+    let descriptor_set = PersistentDescriptorSet::new(
+        &descriptor_set_allocator,
+        pipeline.layout().set_layouts().get(0).unwrap().clone(),
+        [WriteDescriptorSet::acceleration_structure(
+            0,
+            top_level_acceleration_structure,
+        )],
+        [],
+    )
+    .unwrap();
+
+    let mut recreate_swapchain = false;
+    let mut previous_frame_end = Some(sync::now(device.clone()).boxed());
+
+    event_loop.run(move |event, _, control_flow| match event {
+        Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } => {
+            *control_flow = ControlFlow::Exit;
+        }
+        Event::WindowEvent {
+            event: WindowEvent::Resized(_),
+            ..
+        } => {
+            recreate_swapchain = true;
+        }
+        Event::RedrawEventsCleared => {
+            let image_extent: [u32; 2] = window.inner_size().into();
+
+            if image_extent.contains(&0) {
+                return;
+            }
+
+            previous_frame_end.as_mut().unwrap().cleanup_finished();
+
+            if recreate_swapchain {
+                let (new_swapchain, new_images) = swapchain
+                    .recreate(SwapchainCreateInfo {
+                        image_extent,
+                        ..swapchain.create_info()
+                    })
+                    .expect("failed to recreate swapchain");
+
+                swapchain = new_swapchain;
+                attachment_image_views = window_size_dependent_setup(&new_images, &mut viewport);
+                recreate_swapchain = false;
+            }
+
+            let (image_index, suboptimal, acquire_future) =
+                match acquire_next_image(swapchain.clone(), None).map_err(Validated::unwrap) {
+                    Ok(r) => r,
+                    Err(VulkanError::OutOfDate) => {
+                        recreate_swapchain = true;
+                        return;
+                    }
+                    Err(e) => panic!("failed to acquire next image: {e}"),
+                };
+
+            if suboptimal {
+                recreate_swapchain = true;
+            }
+
+            let mut builder = AutoCommandBufferBuilder::primary(
+                &command_buffer_allocator,
+                queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+            builder
+                .begin_rendering(RenderingInfo {
+                    color_attachments: vec![Some(RenderingAttachmentInfo {
+                        store_op: AttachmentStoreOp::Store,
+                        ..RenderingAttachmentInfo::image_view(
+                            attachment_image_views[image_index as usize].clone(),
+                        )
+                    })],
+                    ..Default::default()
+                })
+                .unwrap()
+                .set_viewport(0, [viewport.clone()].into_iter().collect())
+                .unwrap()
+                .bind_pipeline_graphics(pipeline.clone())
+                .unwrap()
+                .bind_vertex_buffers(0, quad_buffer.clone())
+                .unwrap()
+                .bind_descriptor_sets(
+                    PipelineBindPoint::Graphics,
+                    pipeline.layout().clone(),
+                    0,
+                    descriptor_set.clone(),
+                )
+                .unwrap()
+                .draw(quad_buffer.len() as u32, 1, 0, 0)
+                .unwrap()
+                .end_rendering()
+                .unwrap();
+
+            let command_buffer = builder.build().unwrap();
+
+            let future = previous_frame_end
+                .take()
+                .unwrap()
+                .join(acquire_future)
+                .then_execute(queue.clone(), command_buffer)
+                .unwrap()
+                .then_swapchain_present(
+                    queue.clone(),
+                    SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_index),
+                )
+                .then_signal_fence_and_flush();
+
+            match future.map_err(Validated::unwrap) {
+                Ok(future) => {
+                    previous_frame_end = Some(future.boxed());
+                }
+                Err(VulkanError::OutOfDate) => {
+                    recreate_swapchain = true;
+                    previous_frame_end = Some(sync::now(device.clone()).boxed());
+                }
+                Err(e) => {
+                    println!("failed to flush future: {e}");
+                    previous_frame_end = Some(sync::now(device.clone()).boxed());
+                }
+            }
+        }
+        _ => (),
+    });
+}
+
+/// This function is called once during initialization, then again whenever the window is resized.
+fn window_size_dependent_setup(
+    images: &[Arc<Image>],
+    viewport: &mut Viewport,
+) -> Vec<Arc<ImageView>> {
+    let extent = images[0].extent();
+    viewport.extent = [extent[0] as f32, extent[1] as f32];
+
+    images
+        .iter()
+        .map(|image| ImageView::new_default(image.clone()).unwrap())
+        .collect::<Vec<_>>()
+}
+
+fn create_top_level_acceleration_structure(
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    command_buffer_allocator: &StandardCommandBufferAllocator,
+    queue: Arc<Queue>,
+    bottom_level_acceleration_structures: &[&AccelerationStructure],
+) -> Arc<AccelerationStructure> {
+    let instances = bottom_level_acceleration_structures
+        .iter()
+        .map(
+            |&bottom_level_acceleration_structure| AccelerationStructureInstance {
+                instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                    0,
+                    GeometryInstanceFlags::TRIANGLE_FACING_CULL_DISABLE.into(),
+                ),
+                acceleration_structure_reference: bottom_level_acceleration_structure
+                    .device_address()
+                    .get(),
+                ..Default::default()
+            },
+        )
+        .collect::<Vec<_>>();
+
+    let values = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                | BufferUsage::SHADER_DEVICE_ADDRESS,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        instances,
+    )
+    .unwrap();
+
+    let geometries =
+        AccelerationStructureGeometries::Instances(AccelerationStructureGeometryInstancesData {
+            flags: GeometryFlags::OPAQUE,
+            ..AccelerationStructureGeometryInstancesData::new(
+                AccelerationStructureGeometryInstancesDataType::Values(Some(values)),
+            )
+        });
+
+    let build_info = AccelerationStructureBuildGeometryInfo {
+        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
+        mode: BuildAccelerationStructureMode::Build,
+        ..AccelerationStructureBuildGeometryInfo::new(geometries)
+    };
+
+    let build_range_infos = [AccelerationStructureBuildRangeInfo {
+        primitive_count: bottom_level_acceleration_structures.len() as _,
+        primitive_offset: 0,
+        first_vertex: 0,
+        transform_offset: 0,
+    }];
+
+    build_acceleration_structure(
+        memory_allocator,
+        command_buffer_allocator,
+        queue,
+        AccelerationStructureType::TopLevel,
+        build_info,
+        &[bottom_level_acceleration_structures.len() as u32],
+        build_range_infos,
+    )
+}
+
+fn create_bottom_level_acceleration_structure<T: BufferContents + Vertex>(
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    command_buffer_allocator: &StandardCommandBufferAllocator,
+    queue: Arc<Queue>,
+    vertex_buffers: &[&Subbuffer<[T]>],
+) -> Arc<AccelerationStructure> {
+    let description = T::per_vertex();
+
+    assert_eq!(description.stride, std::mem::size_of::<T>() as u32);
+
+    let mut triangles = vec![];
+    let mut max_primitive_counts = vec![];
+    let mut build_range_infos = vec![];
+
+    for &vertex_buffer in vertex_buffers {
+        let primitive_count = vertex_buffer.len() as u32 / 3;
+        triangles.push(AccelerationStructureGeometryTrianglesData {
+            flags: GeometryFlags::OPAQUE,
+            vertex_data: Some(vertex_buffer.clone().into_bytes()),
+            vertex_stride: description.stride,
+            max_vertex: vertex_buffer.len() as _,
+            index_data: None,
+            transform_data: None,
+            ..AccelerationStructureGeometryTrianglesData::new(
+                description.members.get("position").unwrap().format,
+            )
+        });
+        max_primitive_counts.push(primitive_count);
+        build_range_infos.push(AccelerationStructureBuildRangeInfo {
+            primitive_count,
+            primitive_offset: 0,
+            first_vertex: 0,
+            transform_offset: 0,
+        })
     }
-  }
 
-  // wait for finish
-  vkDeviceWaitIdle(global.device);
+    let geometries = AccelerationStructureGeometries::Triangles(triangles);
+    let build_info = AccelerationStructureBuildGeometryInfo {
+        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
+        mode: BuildAccelerationStructureMode::Build,
+        ..AccelerationStructureBuildGeometryInfo::new(geometries)
+    };
 
-  // delete our world generator
-  wld_delete_WorldState(&ws);
-  delete_worldgen_state(pWg);
+    build_acceleration_structure(
+        memory_allocator,
+        command_buffer_allocator,
+        queue,
+        AccelerationStructureType::BottomLevel,
+        build_info,
+        &max_primitive_counts,
+        build_range_infos,
+    )
+}
 
-  // delete graphics resources
-  delete_AppGraphicsWindowState(&window, &global);
-  delete_GraphicsGlobalState(&global);
+fn create_acceleration_structure(
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    ty: AccelerationStructureType,
+    size: DeviceSize,
+) -> Arc<AccelerationStructure> {
+    let buffer = Buffer::new_slice::<u8>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::ACCELERATION_STRUCTURE_STORAGE,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        size,
+    )
+    .unwrap();
 
-  return (EXIT_SUCCESS);
+    unsafe {
+        AccelerationStructure::new(
+            memory_allocator.device().clone(),
+            AccelerationStructureCreateInfo {
+                ty,
+                ..AccelerationStructureCreateInfo::new(buffer)
+            },
+        )
+        .unwrap()
+    }
+}
+
+fn create_scratch_buffer(
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    size: DeviceSize,
+) -> Subbuffer<[u8]> {
+    Buffer::new_slice::<u8>(
+        memory_allocator,
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        size,
+    )
+    .unwrap()
+}
+
+fn build_acceleration_structure(
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    command_buffer_allocator: &StandardCommandBufferAllocator,
+    queue: Arc<Queue>,
+    ty: AccelerationStructureType,
+    mut build_info: AccelerationStructureBuildGeometryInfo,
+    max_primitive_counts: &[u32],
+    build_range_infos: impl IntoIterator<Item = AccelerationStructureBuildRangeInfo>,
+) -> Arc<AccelerationStructure> {
+    let device = memory_allocator.device();
+
+    let AccelerationStructureBuildSizesInfo {
+        acceleration_structure_size,
+        build_scratch_size,
+        ..
+    } = device
+        .acceleration_structure_build_sizes(
+            AccelerationStructureBuildType::Device,
+            &build_info,
+            max_primitive_counts,
+        )
+        .unwrap();
+
+    let acceleration_structure =
+        create_acceleration_structure(memory_allocator.clone(), ty, acceleration_structure_size);
+    let scratch_buffer = create_scratch_buffer(memory_allocator.clone(), build_scratch_size);
+
+    build_info.dst_acceleration_structure = Some(acceleration_structure.clone());
+    build_info.scratch_data = Some(scratch_buffer);
+
+    let mut builder = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator,
+        queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    unsafe {
+        builder
+            .build_acceleration_structure(build_info, build_range_infos.into_iter().collect())
+            .unwrap();
+    }
+
+    let command_buffer = builder.build().unwrap();
+    command_buffer
+        .execute(queue)
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    acceleration_structure
 }
