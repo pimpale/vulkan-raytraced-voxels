@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nalgebra::Matrix4;
+use nalgebra::{Matrix4, Point3, Vector3};
 use vulkano::{
     acceleration_structure::AccelerationStructure,
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -205,10 +205,10 @@ pub struct Renderer {
     queue: Arc<Queue>,
     quad_buffer: Subbuffer<[Vertex2D]>,
     memory_allocator: Arc<StandardMemoryAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     swapchain: Arc<Swapchain>,
     attachment_image_views: Vec<Arc<ImageView>>,
-    descriptor_set: Arc<PersistentDescriptorSet>,
     pipeline: Arc<GraphicsPipeline>,
     wdd_needs_rebuild: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
@@ -221,7 +221,6 @@ impl Renderer {
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-        top_level_acceleration_structure: Arc<AccelerationStructure>,
     ) -> Renderer {
         let device = memory_allocator.device().clone();
 
@@ -296,17 +295,6 @@ impl Renderer {
         )
         .unwrap();
 
-        let descriptor_set = PersistentDescriptorSet::new(
-            &descriptor_set_allocator,
-            pipeline.layout().set_layouts().get(0).unwrap().clone(),
-            [WriteDescriptorSet::acceleration_structure(
-                0,
-                top_level_acceleration_structure,
-            )],
-            [],
-        )
-        .unwrap();
-
         Renderer {
             surface,
             command_buffer_allocator,
@@ -315,7 +303,7 @@ impl Renderer {
             queue,
             swapchain,
             pipeline,
-            descriptor_set,
+            descriptor_set_allocator,
             attachment_image_views,
             viewport,
             memory_allocator,
@@ -340,7 +328,14 @@ impl Renderer {
         self.viewport = new_viewport;
     }
 
-    pub fn render(&mut self, mvp: Matrix4<f32>) {
+    pub fn render(
+        &mut self,
+        top_level_acceleration_structure: Arc<AccelerationStructure>,
+        eye: Point3<f32>,
+        front: Vector3<f32>,
+        right: Vector3<f32>,
+        up: Vector3<f32>,
+    ) {
         // Do not draw frame when screen dimensions are zero.
         // On Windows, this can occur from minimizing the application.
         let extent = get_surface_extent(&self.surface);
@@ -383,6 +378,17 @@ impl Renderer {
         )
         .unwrap();
 
+        let descriptor_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            self.pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            [WriteDescriptorSet::acceleration_structure(
+                0,
+                top_level_acceleration_structure,
+            )],
+            [],
+        )
+        .unwrap();
+
         builder
             .begin_rendering(RenderingInfo {
                 color_attachments: vec![Some(RenderingAttachmentInfo {
@@ -404,15 +410,18 @@ impl Renderer {
                 PipelineBindPoint::Graphics,
                 self.pipeline.layout().clone(),
                 0,
-                self.descriptor_set.clone(),
+                descriptor_set,
             )
             .unwrap()
             .push_constants(
                 self.pipeline.layout().clone(),
                 0,
-                fs::PushConstantData {
-                    mvp: mvp.into(),
-                }
+                fs::Camera {
+                    eye: <[f32; 3]>::from(eye).into(),
+                    front: <[f32; 3]>::from(front).into(),
+                    right: <[f32; 3]>::from(right).into(),
+                    up: <[f32; 3]>::from(up).into(),
+                },
             )
             .unwrap()
             .draw(self.quad_buffer.len() as u32, 1, 0, 0)

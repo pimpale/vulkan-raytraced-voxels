@@ -99,14 +99,6 @@ impl GameWorld {
 
         assert!(device == memory_allocator.device());
 
-        // initialize scene
-        let mut scene = Scene::new(
-            queue.clone(),
-            memory_allocator.clone(),
-            command_buffer_allocator.clone(),
-            HashMap::new(),
-        );
-
         // initialize interactive rendering if necessary
         let per_window_state = match interactive_rendering_config {
             Some(InteractiveRenderingConfig {
@@ -120,7 +112,6 @@ impl GameWorld {
                     command_buffer_allocator.clone(),
                     memory_allocator.clone(),
                     descriptor_set_allocator.clone(),
-                    scene.top_level_acceleration_structure(),
                 );
 
                 Some(PerWindowState {
@@ -132,6 +123,14 @@ impl GameWorld {
             }
             None => None,
         };
+
+        // initialize scene
+        let scene = Scene::new(
+            queue.clone(),
+            memory_allocator.clone(),
+            command_buffer_allocator.clone(),
+            HashMap::new(),
+        );
 
         GameWorld {
             entities: HashMap::new(),
@@ -280,9 +279,14 @@ impl GameWorld {
     pub fn render(&mut self) {
         if let Some(ref mut per_window_state) = self.per_window_state {
             let extent = interactive_rendering::get_surface_extent(&per_window_state.surface);
-            per_window_state
-                .renderer
-                .render(per_window_state.camera.mvp(extent))
+            let (eye, front, right, up) = per_window_state.camera.eye_front_right_up();
+            per_window_state.renderer.render(
+                self.scene.top_level_acceleration_structure(),
+                eye,
+                front,
+                right,
+                up,
+            )
         }
     }
 

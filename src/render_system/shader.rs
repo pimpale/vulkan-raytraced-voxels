@@ -28,19 +28,24 @@ pub mod fs {
             
             layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
 
-            layout(push_constant) uniform PushConstantData {
-                mat4 mvp;
-            } pc;
+            layout(push_constant) uniform Camera {
+                vec3 eye;
+                vec3 front;
+                vec3 up;
+                vec3 right;
+            } camera;
 
             void main() {
                 float t_min = 0.01;
                 float t_max = 1000.0;
 
+                vec2 uv = in_uv;
+
                 // ray origin
-                vec3 origin = (pc.mvp * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+                vec3 origin = camera.eye;
                 
                 // ray direction
-                vec3 direction = normalize((pc.mvp * vec4(in_uv, 1.0, 0.0)).xyz);
+                vec3 direction = normalize(uv.x * camera.right + uv.y * camera.up + camera.front);
 
                 rayQueryEXT ray_query;
                 rayQueryInitializeEXT(
@@ -60,7 +65,7 @@ pub mod fs {
                     f_color = vec4(0.0, 0.0, 0.0, 1.0);
                 } else {
                     // hit
-                    f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                    f_color = vec4(rayQueryGetIntersectionBarycentricsEXT(ray_query, true), 0.0, 1.0);
                 }
             }
         ",

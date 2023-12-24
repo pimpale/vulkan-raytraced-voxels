@@ -98,13 +98,15 @@ where
     }
 
     pub fn update_object(&mut self, key: K, object: Vec<Vertex>) {
-        // update_bottom_level_acceleration_structure(
-        //     self.memory_allocator.clone(),
-        //     &self.command_buffer_allocator,
-        //     self.queue.clone(),
-        //     self.bottom_level_acceleration_structures.get_mut(&key).unwrap(),
-        //     &[&vertex_buffer(self.memory_allocator.clone(), [&object]).unwrap()],
-        // );
+        self.bottom_level_acceleration_structures.insert(
+            key.clone(),
+            create_bottom_level_acceleration_structure(
+                self.memory_allocator.clone(),
+                &self.command_buffer_allocator,
+                self.queue.clone(),
+                &[&vertex_buffer(self.memory_allocator.clone(), [&object]).unwrap()],
+            ),
+        );
         self.objects.insert(key, object);
         self.tlas_needs_update = true;
     }
@@ -119,16 +121,17 @@ where
 
     pub fn top_level_acceleration_structure(&mut self) -> Arc<AccelerationStructure> {
         if self.tlas_needs_update {
-            // update_top_level_acceleration_structure(
-            //     self.memory_allocator.clone(),
-            //     &self.command_buffer_allocator,
-            //     self.queue.clone(),
-            //     &self.bottom_level_acceleration_structures
-            //         .values()
-            //         .map(|v| v as &AccelerationStructure)
-            //         .collect::<Vec<_>>(),
-            //     &mut self.top_level_acceleration_structure,
-            // );
+            self.top_level_acceleration_structure = create_top_level_acceleration_structure(
+                self.memory_allocator.clone(),
+                &self.command_buffer_allocator,
+                self.queue.clone(),
+                &self
+                    .bottom_level_acceleration_structures
+                    .values()
+                    .map(|v| v as &AccelerationStructure)
+                    .collect::<Vec<_>>(),
+            );
+            self.tlas_needs_update = false;
         }
         return self.top_level_acceleration_structure.clone();
     }
@@ -198,8 +201,7 @@ fn create_top_level_acceleration_structure(
             instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(0, 0),
             ..Default::default()
         });
-    } 
-
+    }
 
     let values = Buffer::from_iter(
         memory_allocator.clone(),
@@ -226,7 +228,8 @@ fn create_top_level_acceleration_structure(
         });
 
     let build_info = AccelerationStructureBuildGeometryInfo {
-        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
+        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE
+            | BuildAccelerationStructureFlags::ALLOW_UPDATE,
         mode: BuildAccelerationStructureMode::Build,
         ..AccelerationStructureBuildGeometryInfo::new(geometries)
     };

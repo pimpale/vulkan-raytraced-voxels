@@ -11,7 +11,6 @@ fn deg2rad(deg: f32) -> f32 {
 // vectors giving the current perception of the camera
 #[derive(Clone, Debug)]
 struct DirVecs {
-    // NOTE: front is actually backwards
     front: Vector3<f32>,
     right: Vector3<f32>,
     up: Vector3<f32>,
@@ -33,33 +32,8 @@ impl DirVecs {
     }
 }
 
-fn gen_perspective_projection(extent: [u32; 2]) -> Matrix4<f32> {
-    let [screen_x, screen_y] = extent;
-    let aspect_ratio = screen_x as f32 / screen_y as f32;
-    let fov = deg2rad(90.0);
-    let near = 0.1;
-    let far = 100.0;
-    Matrix4::new_perspective(aspect_ratio, fov, near, far)
-}
-
-// Converts a space with depth values in the range [-1, 1] to a space with depth values in the range [0, 1] 
-// keeps the x and y values the same
-fn vk_depth_correction() -> Matrix4<f32> {
-    Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, 0.5)) * Matrix4::new_translation(&Vector3::new(0.0, 0.0, 1.0))
-}
-
-#[allow(dead_code)]
-fn gen_orthographic_projection([screen_x, screen_y]: [u32; 2]) -> Matrix4<f32> {
-    let scale = 100.0;
-    let left = -(screen_x as f32) / scale;
-    let right = screen_x as f32 / scale;
-    let bottom = -(screen_y as f32) / scale;
-    let top = screen_y as f32 / scale;
-    vk_depth_correction() * Matrix4::new_orthographic(left, right, bottom, top, -200.0, 200.0)
-}
-
 pub trait Camera {
-    fn mvp(&self, extent: [u32; 2]) -> Matrix4<f32>;
+    fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>,  Vector3<f32>, Vector3<f32>);
     fn set_position(&mut self, pos: Point3<f32>);
     fn set_rotation(&mut self, rot: UnitQuaternion<f32>);
 }
@@ -118,11 +92,21 @@ impl SphericalCamera {
 }
 
 impl Camera for SphericalCamera {
-    fn mvp(&self, extent: [u32; 2]) -> Matrix4<f32> {
-        let dirs = DirVecs::new(self.worldup, self.pitch, self.yaw);
-        let projection = gen_perspective_projection(extent);
-        let view = Matrix4::look_at_rh(&(self.root_pos - self.offset*(self.root_rot*dirs.front)), &self.root_pos, &self.worldup);
-        projection * view
+    // fn mvp(&self, extent: [u32; 2]) -> Matrix4<f32> {
+    //     let dirs = DirVecs::new(self.worldup, self.pitch, self.yaw);
+    //     let projection = gen_perspective_projection(extent);
+    //     let view = Matrix4::look_at_rh(&(self.root_pos - self.offset*(self.root_rot*dirs.front)), &self.root_pos, &self.worldup);
+    //     projection * view
+    // }
+
+    // returns eye, front, right, up
+    fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>,  Vector3<f32>, Vector3<f32>) {
+        let vecs = DirVecs::new(self.worldup, self.pitch, self.yaw);
+        let front = self.root_rot*vecs.front;
+        let right = self.root_rot*vecs.right;
+        let up = self.root_rot*vecs.up;
+        let eye = self.root_pos - self.offset*front;
+        (eye, front, right, up)
     }
 
     fn set_position(&mut self, pos: Point3<f32>) {
@@ -190,54 +174,5 @@ impl InteractiveCamera for SphericalCamera {
             }
             _ => {}
         }
-    }
-}
-
-
-/// bird's eye view camera: orthographic projection, pitch of -90 degrees
-pub struct BEVCamera {
-        // position of the camera's root point
-        root_pos: Point3<f32>,
-        // rotation of the camera's root point
-        root_rot: UnitQuaternion<f32>,
-        // offset from the root position
-        offset: f32,
-}
-
-impl BEVCamera {
-    pub fn new() -> BEVCamera {
-        BEVCamera {
-            root_pos: Point3::default(),
-            root_rot: UnitQuaternion::identity(),
-            offset: 3.0,
-        }
-    }
-}
-
-impl Camera for BEVCamera {
-    fn mvp(&self, extent: [u32; 2]) -> Matrix4<f32> {
-        let front = Vector3::new(-1.0, 0.0, 0.0);
-        let worldup = self.root_rot * front;
-        let projection = gen_orthographic_projection(extent);
-        let view = Matrix4::look_at_rh(&(self.root_pos + Vector3::new(0.0, self.offset, 0.0)), &self.root_pos, &worldup);
-        projection * view
-    }
-
-    fn set_position(&mut self, pos: Point3<f32>) {
-        self.root_pos = pos;
-    }
-
-    fn set_rotation(&mut self, rot: UnitQuaternion<f32>) {
-        self.root_rot = rot;
-    }
-}
-
-impl InteractiveCamera for BEVCamera {
-    fn update(&mut self) {
-        // do nothing
-    }
-
-    fn handle_event(&mut self, _extent: [u32; 2], _input: &winit::event::WindowEvent) {
-        // do nothing
     }
 }
