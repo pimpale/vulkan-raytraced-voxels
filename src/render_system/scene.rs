@@ -1,56 +1,92 @@
 use std::{collections::HashMap, sync::Arc};
 
 use vulkano::{
+    acceleration_structure::{
+        AccelerationStructure, AccelerationStructureBuildGeometryInfo,
+        AccelerationStructureBuildRangeInfo, AccelerationStructureBuildSizesInfo,
+        AccelerationStructureBuildType, AccelerationStructureCreateInfo,
+        AccelerationStructureGeometries, AccelerationStructureGeometryInstancesData,
+        AccelerationStructureGeometryInstancesDataType, AccelerationStructureGeometryTrianglesData,
+        AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
+        BuildAccelerationStructureMode, GeometryFlags, GeometryInstanceFlags,
+    },
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
-    memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter}, command_buffer::{allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage}, device::Queue, acceleration_structure::{AccelerationStructure, AccelerationStructureInstance, GeometryInstanceFlags, AccelerationStructureGeometries, AccelerationStructureGeometryInstancesData, GeometryFlags, AccelerationStructureGeometryInstancesDataType, AccelerationStructureBuildGeometryInfo, BuildAccelerationStructureMode, AccelerationStructureBuildRangeInfo, AccelerationStructureType, AccelerationStructureGeometryTrianglesData, BuildAccelerationStructureFlags, AccelerationStructureCreateInfo, AccelerationStructureBuildSizesInfo, AccelerationStructureBuildType}, Packed24_8, pipeline::graphics::vertex_input::Vertex,
+    command_buffer::{
+        allocator::StandardCommandBufferAllocator,
+        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryCommandBufferAbstract,
+    },
+    device::Queue,
+    memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
+    pipeline::graphics::vertex_input,
+    DeviceSize, Packed24_8, sync::GpuFuture,
 };
-
+/// Corresponds to a TLAS
 pub struct Scene<K, Vertex> {
-    objects: HashMap<K, Vec<Vertex>>,
+    queue: Arc<Queue>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    vertex_buffer: Option<Subbuffer<[Vertex]>>,
-    vertex_buffer_needs_update: bool,
+    objects: HashMap<K, Vec<Vertex>>,
+    bottom_level_acceleration_structures: HashMap<K, Arc<AccelerationStructure>>,
+    top_level_acceleration_structure: Arc<AccelerationStructure>,
+    needs_update: bool,
 }
 
 #[allow(dead_code)]
 impl<K, Vertex> Scene<K, Vertex>
 where
-    Vertex: Clone + BufferContents,
+    Vertex: vertex_input::Vertex + Clone + BufferContents,
     K: std::cmp::Eq + std::hash::Hash,
 {
     pub fn new(
+        queue: Arc<Queue>,
         memory_allocator: Arc<dyn MemoryAllocator>,
+        command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         objects: HashMap<K, Vec<Vertex>>,
     ) -> Scene<K, Vertex> {
-        Scene {
-            vertex_buffer: vertex_buffer(memory_allocator.clone(), objects.values()),
-            objects,
+        // assert that the vertex type must have a field called position
+        assert!(Vertex::per_vertex().members.contains_key("position"));
+
+        let vertex_buffers = vertex_buffer(memory_allocator.clone(), objects.values());
+        
+        let acceleration_structure = create_bottom_level_acceleration_structure(
             memory_allocator,
-            vertex_buffer_needs_update: false,
+            &command_buffer_allocator,
+            queue,
+            vertex_buffer.to_vec(),
+        );
+
+        Scene {
+            queue,
+            command_buffer_allocator,
+            memory_allocator,
+            objects,
+            acceleration_structure,
+            needs_update: false,
         }
     }
 
     pub fn add_object(&mut self, key: K, object: Vec<Vertex>) {
         self.objects.insert(key, object);
-        self.vertex_buffer_needs_update = true;
+        self.needs_update = true;
+    }
+
+    pub fn update_object(&mut self, key: K, object: Vec<Vertex>) {
+        self.objects.insert(key, object);
+        self.needs_update = true;
     }
 
     pub fn remove_object(&mut self, key: K) {
         let removed = self.objects.remove(&key);
         if removed.is_some() {
-            self.vertex_buffer_needs_update = true;
+            self.needs_update = true;
         }
     }
 
-    pub fn objects(&self) -> &HashMap<K, Vec<Vertex>> {
-        &self.objects
-    }
-
-    pub fn vertex_buffer(&mut self) -> Option<Subbuffer<[Vertex]>> {
-        if self.vertex_buffer_needs_update {
+    pub fn top_level_acceleration_structure(&mut self) -> Arc<AccelerationStructure> {
+        if self.needs_update {
             self.vertex_buffer =
                 vertex_buffer(self.memory_allocator.clone(), self.objects.values());
-            self.vertex_buffer_needs_update = false;
+            self.needs_update = false;
         }
         return self.vertex_buffer.clone();
     }
@@ -75,7 +111,8 @@ where
         let buffer = Buffer::from_iter(
             memory_allocator,
             BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
+                usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                    | BufferUsage::SHADER_DEVICE_ADDRESS,
                 ..Default::default()
             },
             AllocationCreateInfo {
@@ -90,7 +127,6 @@ where
         return Some(buffer);
     }
 }
-
 
 fn create_top_level_acceleration_structure(
     memory_allocator: Arc<dyn MemoryAllocator>,
@@ -162,7 +198,7 @@ fn create_top_level_acceleration_structure(
     )
 }
 
-fn create_bottom_level_acceleration_structure<T: BufferContents + Vertex>(
+fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::Vertex>(
     memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: &StandardCommandBufferAllocator,
     queue: Arc<Queue>,

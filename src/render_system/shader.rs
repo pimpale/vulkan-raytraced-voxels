@@ -25,14 +25,22 @@ pub mod fs {
 
             layout(location = 0) in vec2 in_uv;
             layout(location = 0) out vec4 f_color;
-
+            
             layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
+
+            layout(push_constant) uniform PushConstantData {
+                mat4 mvp;
+            } pc;
 
             void main() {
                 float t_min = 0.01;
                 float t_max = 1000.0;
-                vec3 origin = vec3(0.0, 0.0, 0.0);
-                vec3 direction = normalize(vec3(in_uv * 1.0, 1.0));
+
+                // ray origin
+                vec3 origin = (pc.mvp * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+                
+                // ray direction
+                vec3 direction = normalize((pc.mvp * vec4(in_uv, 1.0, 0.0)).xyz);
 
                 rayQueryEXT ray_query;
                 rayQueryInitializeEXT(

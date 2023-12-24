@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
+use nalgebra::Matrix4;
 use vulkano::{
+    acceleration_structure::AccelerationStructure,
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
         RenderPassBeginInfo, RenderingAttachmentInfo, RenderingInfo,
     },
-    descriptor_set::{allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet},
+    descriptor_set::{
+        allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
+    },
     device::{
         physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned,
         Features, Queue, QueueCreateInfo, QueueFlags,
@@ -35,7 +39,7 @@ use vulkano::{
     shader::{spirv::ExecutionModel, EntryPoint},
     swapchain::{self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
     sync::{self, GpuFuture},
-    Validated, VulkanError, acceleration_structure::AccelerationStructure,
+    Validated, VulkanError,
 };
 use winit::window::Window;
 
@@ -204,7 +208,7 @@ pub struct Renderer {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     swapchain: Arc<Swapchain>,
     attachment_image_views: Vec<Arc<ImageView>>,
-    descriptor_set: Arc<PersistentDescriptorSet>, 
+    descriptor_set: Arc<PersistentDescriptorSet>,
     pipeline: Arc<GraphicsPipeline>,
     wdd_needs_rebuild: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
@@ -214,6 +218,7 @@ impl Renderer {
     pub fn new(
         surface: Arc<Surface>,
         queue: Arc<Queue>,
+        command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
@@ -290,7 +295,7 @@ impl Renderer {
             QUAD.iter().cloned(),
         )
         .unwrap();
-        
+
         let descriptor_set = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
             pipeline.layout().set_layouts().get(0).unwrap().clone(),
@@ -304,10 +309,7 @@ impl Renderer {
 
         Renderer {
             surface,
-            command_buffer_allocator: Arc::new(StandardCommandBufferAllocator::new(
-                device.clone(),
-                Default::default(),
-            )),
+            command_buffer_allocator,
             previous_frame_end: Some(sync::now(device.clone()).boxed()),
             device,
             queue,
@@ -338,10 +340,7 @@ impl Renderer {
         self.viewport = new_viewport;
     }
 
-    pub fn render<Pc>(&mut self, push_data: Pc)
-    where
-        Pc: BufferContents,
-    {
+    pub fn render(&mut self, mvp: Matrix4<f32>) {
         // Do not draw frame when screen dimensions are zero.
         // On Windows, this can occur from minimizing the application.
         let extent = get_surface_extent(&self.surface);
@@ -406,6 +405,14 @@ impl Renderer {
                 self.pipeline.layout().clone(),
                 0,
                 self.descriptor_set.clone(),
+            )
+            .unwrap()
+            .push_constants(
+                self.pipeline.layout().clone(),
+                0,
+                fs::PushConstantData {
+                    mvp: mvp.into(),
+                }
             )
             .unwrap()
             .draw(self.quad_buffer.len() as u32, 1, 0, 0)
