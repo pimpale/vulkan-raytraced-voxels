@@ -12,13 +12,14 @@ use vulkano::{
     },
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
-        allocator::StandardCommandBufferAllocator,
-        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryCommandBufferAbstract,
+        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
+        PrimaryCommandBufferAbstract,
     },
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
     pipeline::graphics::vertex_input,
-    DeviceSize, Packed24_8, sync::GpuFuture,
+    sync::GpuFuture,
+    DeviceSize, Packed24_8,
 };
 /// Corresponds to a TLAS
 pub struct Scene<K, Vertex> {
@@ -28,14 +29,14 @@ pub struct Scene<K, Vertex> {
     objects: HashMap<K, Vec<Vertex>>,
     bottom_level_acceleration_structures: HashMap<K, Arc<AccelerationStructure>>,
     top_level_acceleration_structure: Arc<AccelerationStructure>,
-    needs_update: bool,
+    tlas_needs_update: bool,
 }
 
 #[allow(dead_code)]
 impl<K, Vertex> Scene<K, Vertex>
 where
     Vertex: vertex_input::Vertex + Clone + BufferContents,
-    K: std::cmp::Eq + std::hash::Hash,
+    K: Clone + std::cmp::Eq + std::hash::Hash,
 {
     pub fn new(
         queue: Arc<Queue>,
@@ -46,13 +47,29 @@ where
         // assert that the vertex type must have a field called position
         assert!(Vertex::per_vertex().members.contains_key("position"));
 
-        let vertex_buffers = vertex_buffer(memory_allocator.clone(), objects.values());
-        
-        let acceleration_structure = create_bottom_level_acceleration_structure(
-            memory_allocator,
+        let bottom_level_acceleration_structures = objects
+            .iter()
+            .map(|(key, object)| {
+                (
+                    key.clone(),
+                    create_bottom_level_acceleration_structure(
+                        memory_allocator.clone(),
+                        &command_buffer_allocator,
+                        queue.clone(),
+                        &[&vertex_buffer(memory_allocator.clone(), [object]).unwrap()],
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let top_level_acceleration_structure = create_top_level_acceleration_structure(
+            memory_allocator.clone(),
             &command_buffer_allocator,
-            queue,
-            vertex_buffer.to_vec(),
+            queue.clone(),
+            &bottom_level_acceleration_structures
+                .values()
+                .map(|v| v as &AccelerationStructure)
+                .collect::<Vec<_>>(),
         );
 
         Scene {
@@ -60,35 +77,60 @@ where
             command_buffer_allocator,
             memory_allocator,
             objects,
-            acceleration_structure,
-            needs_update: false,
+            bottom_level_acceleration_structures,
+            top_level_acceleration_structure,
+            tlas_needs_update: false,
         }
     }
 
     pub fn add_object(&mut self, key: K, object: Vec<Vertex>) {
+        self.bottom_level_acceleration_structures.insert(
+            key.clone(),
+            create_bottom_level_acceleration_structure(
+                self.memory_allocator.clone(),
+                &self.command_buffer_allocator,
+                self.queue.clone(),
+                &[&vertex_buffer(self.memory_allocator.clone(), [&object]).unwrap()],
+            ),
+        );
         self.objects.insert(key, object);
-        self.needs_update = true;
+        self.tlas_needs_update = true;
     }
 
     pub fn update_object(&mut self, key: K, object: Vec<Vertex>) {
+        // update_bottom_level_acceleration_structure(
+        //     self.memory_allocator.clone(),
+        //     &self.command_buffer_allocator,
+        //     self.queue.clone(),
+        //     self.bottom_level_acceleration_structures.get_mut(&key).unwrap(),
+        //     &[&vertex_buffer(self.memory_allocator.clone(), [&object]).unwrap()],
+        // );
         self.objects.insert(key, object);
-        self.needs_update = true;
+        self.tlas_needs_update = true;
     }
 
     pub fn remove_object(&mut self, key: K) {
-        let removed = self.objects.remove(&key);
+        self.objects.remove(&key);
+        let removed = self.bottom_level_acceleration_structures.remove(&key);
         if removed.is_some() {
-            self.needs_update = true;
+            self.tlas_needs_update = true;
         }
     }
 
     pub fn top_level_acceleration_structure(&mut self) -> Arc<AccelerationStructure> {
-        if self.needs_update {
-            self.vertex_buffer =
-                vertex_buffer(self.memory_allocator.clone(), self.objects.values());
-            self.needs_update = false;
+        if self.tlas_needs_update {
+            // update_top_level_acceleration_structure(
+            //     self.memory_allocator.clone(),
+            //     &self.command_buffer_allocator,
+            //     self.queue.clone(),
+            //     &self.bottom_level_acceleration_structures
+            //         .values()
+            //         .map(|v| v as &AccelerationStructure)
+            //         .collect::<Vec<_>>(),
+            //     &mut self.top_level_acceleration_structure,
+            // );
         }
-        return self.vertex_buffer.clone();
+        return self.top_level_acceleration_structure.clone();
     }
 }
 
@@ -102,7 +144,7 @@ where
 {
     let vertexes = objects
         .into_iter()
-        .flat_map(|o| o.iter())
+        .flatten()
         .cloned()
         .collect::<Vec<Vertex>>();
     if vertexes.len() == 0 {
@@ -134,7 +176,7 @@ fn create_top_level_acceleration_structure(
     queue: Arc<Queue>,
     bottom_level_acceleration_structures: &[&AccelerationStructure],
 ) -> Arc<AccelerationStructure> {
-    let instances = bottom_level_acceleration_structures
+    let mut instances = bottom_level_acceleration_structures
         .iter()
         .map(
             |&bottom_level_acceleration_structure| AccelerationStructureInstance {
@@ -149,6 +191,15 @@ fn create_top_level_acceleration_structure(
             },
         )
         .collect::<Vec<_>>();
+
+    // if there are no instances, then we create a dummy inactive instance to permit the TLAS to be built
+    if instances.len() == 0 {
+        instances.push(AccelerationStructureInstance {
+            instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(0, 0),
+            ..Default::default()
+        });
+    } 
+
 
     let values = Buffer::from_iter(
         memory_allocator.clone(),
@@ -236,7 +287,8 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
 
     let geometries = AccelerationStructureGeometries::Triangles(triangles);
     let build_info = AccelerationStructureBuildGeometryInfo {
-        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE,
+        flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE
+            | BuildAccelerationStructureFlags::ALLOW_UPDATE,
         mode: BuildAccelerationStructureMode::Build,
         ..AccelerationStructureBuildGeometryInfo::new(geometries)
     };

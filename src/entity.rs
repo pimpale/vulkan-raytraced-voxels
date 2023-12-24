@@ -77,10 +77,6 @@ pub struct GameWorld {
     ccd_solver: CCDSolver,
     // state per window
     per_window_state: Option<PerWindowState>,
-    // per device vulkan objects
-    queue: Arc<Queue>,
-    memory_allocator: Arc<StandardMemoryAllocator>,
-    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     // handle user input
     user_input_state: UserInputState,
 }
@@ -105,9 +101,9 @@ impl GameWorld {
 
         // initialize scene
         let mut scene = Scene::new(
-            queue,
+            queue.clone(),
             memory_allocator.clone(),
-            command_buffer_allocator,
+            command_buffer_allocator.clone(),
             HashMap::new(),
         );
 
@@ -149,9 +145,6 @@ impl GameWorld {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
-            queue,
-            memory_allocator,
-            command_buffer_allocator,
             per_window_state,
             user_input_state: UserInputState::new(),
         }

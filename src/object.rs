@@ -122,7 +122,7 @@ pub fn unitcube() -> Vec<Vertex> {
 pub fn transform(vec: &Vec<Vertex>, isometry: &Isometry3<f32>) -> Vec<Vertex> {
     vec.iter()
         .map(|v| {
-            let loc: Point3<f32> = isometry * Point3::from(v.loc);
+            let loc: Point3<f32> = isometry * Point3::from(v.position);
             Vertex::new(loc.into(), v.color)
         })
         .collect()
@@ -133,23 +133,23 @@ pub fn get_aabb(obj: &[Vertex]) -> Vector3<f32> {
     let mut min = Vector3::new(std::f32::MAX, std::f32::MAX, std::f32::MAX);
     let mut max = Vector3::new(std::f32::MIN, std::f32::MIN, std::f32::MIN);
     for v in obj.iter() {
-        if v.loc[0] < min[0] {
-            min[0] = v.loc[0];
+        if v.position[0] < min[0] {
+            min[0] = v.position[0];
         }
-        if v.loc[1] < min[1] {
-            min[1] = v.loc[1];
+        if v.position[1] < min[1] {
+            min[1] = v.position[1];
         }
-        if v.loc[2] < min[2] {
-            min[2] = v.loc[2];
+        if v.position[2] < min[2] {
+            min[2] = v.position[2];
         }
-        if v.loc[0] > max[0] {
-            max[0] = v.loc[0];
+        if v.position[0] > max[0] {
+            max[0] = v.position[0];
         }
-        if v.loc[1] > max[1] {
-            max[1] = v.loc[1];
+        if v.position[1] > max[1] {
+            max[1] = v.position[1];
         }
-        if v.loc[2] > max[2] {
-            max[2] = v.loc[2];
+        if v.position[2] > max[2] {
+            max[2] = v.position[2];
         }
     }
     max - min

@@ -1,6 +1,5 @@
 use entity::{
-    EntityCreationCameraData, EntityCreationData, EntityCreationPhysicsData, GameWorld,
-    InteractiveRenderingConfig,
+    EntityCreationData, EntityCreationPhysicsData, GameWorld, InteractiveRenderingConfig,
 };
 use nalgebra::{Isometry, Isometry3, Point3, Vector3};
 use std::collections::HashMap;
@@ -9,6 +8,7 @@ use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo};
+use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned, QueueCreateInfo, QueueFlags,
@@ -47,8 +47,9 @@ mod render_system;
 
 fn build_scene(
     queue: Arc<vulkano::device::Queue>,
-    standard_command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<StandardMemoryAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     surface: Arc<Surface>,
 ) -> GameWorld {
     let rd = vec![
@@ -89,8 +90,9 @@ fn build_scene(
 
     let mut world = GameWorld::new(
         queue,
-        standard_command_buffer_allocator,
+        command_buffer_allocator,
         memory_allocator,
+        descriptor_set_allocator,
         Some(InteractiveRenderingConfig {
             surface,
             tracking_entity: 0,
@@ -177,16 +179,23 @@ fn main() {
     );
 
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-    let standard_command_buffer_allocator =
-        Arc::new(StandardCommandBufferAllocator::new(device.clone()));
+    let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+        device.clone(),
+        Default::default(),
+    ));
+    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+        device.clone(),
+        Default::default(),
+    ));
 
     let mut start_time = std::time::Instant::now();
     let mut frame_count = 0;
 
     let mut world = build_scene(
         queue.clone(),
-        standard_command_buffer_allocator.clone(),
+        command_buffer_allocator.clone(),
         memory_allocator.clone(),
+        descriptor_set_allocator.clone(),
         surface.clone(),
     );
 
