@@ -92,12 +92,11 @@ pub mod fs {
                     vec2 bary = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
                     vec3 bary3 = vec3(bary.x, bary.y, 1.0 - bary.x - bary.y);
 
-
                     uint base_offset = geometry_offset_buffer[instance_index] + 3*primitive_index;
+
+                    vec3 tuv = vertex_buffer[base_offset + 0].tuv * bary3.x + vertex_buffer[base_offset + 1].tuv * bary3.y + vertex_buffer[base_offset + 2].tuv * bary3.z;
                     
-                    //vec3 tuv = vertex_buffer[base_offset + 0].tuv * bary3.x + vertex_buffer[base_offset + 1].tuv * bary3.y + vertex_buffer[base_offset + 2].tuv * bary3.z;
-                    
-                    f_color = vec4(vertex_buffer[0].tuv.xyz - vec3(0.95, 1.95, 1.95), 1.0);
+                    f_color = vec4(tuv, 1.0);
                 }
             }
         ",
