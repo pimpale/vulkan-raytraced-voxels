@@ -421,6 +421,7 @@ impl Renderer {
                     front: <[f32; 3]>::from(front).into(),
                     right: <[f32; 3]>::from(right).into(),
                     up: <[f32; 3]>::from(up).into(),
+                    aspect: extent[0] as f32 / extent[1] as f32,
                 },
             )
             .unwrap()

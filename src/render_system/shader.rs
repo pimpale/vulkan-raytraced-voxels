@@ -21,7 +21,7 @@ pub mod fs {
         ty: "fragment",
         src: r"
             #version 460
-            #extension GL_EXT_ray_query : enable
+            #extension GL_EXT_ray_query: enable
 
             layout(location = 0) in vec2 in_uv;
             layout(location = 0) out vec4 f_color;
@@ -33,6 +33,7 @@ pub mod fs {
                 vec3 front;
                 vec3 up;
                 vec3 right;
+                float aspect;
             } camera;
 
             void main() {
@@ -45,20 +46,22 @@ pub mod fs {
                 vec3 origin = camera.eye;
                 
                 // ray direction
-                vec3 direction = normalize(uv.x * camera.right + uv.y * camera.up + camera.front);
+                vec3 direction = normalize(uv.x * camera.right * camera.aspect + uv.y * camera.up + camera.front);
 
                 rayQueryEXT ray_query;
                 rayQueryInitializeEXT(
                     ray_query,
                     top_level_acceleration_structure,
-                    gl_RayFlagsTerminateOnFirstHitEXT,
+                    gl_RayFlagsCullBackFacingTrianglesEXT,
                     0xFF,
                     origin,
                     t_min,
                     direction,
                     t_max
                 );
-                rayQueryProceedEXT(ray_query);
+
+                // trace ray
+                while (rayQueryProceedEXT(ray_query));
 
                 if (rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
                     // miss

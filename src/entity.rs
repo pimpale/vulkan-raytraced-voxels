@@ -129,7 +129,6 @@ impl GameWorld {
             queue.clone(),
             memory_allocator.clone(),
             command_buffer_allocator.clone(),
-            HashMap::new(),
         );
 
         GameWorld {
@@ -179,8 +178,7 @@ impl GameWorld {
 
             if new_isometry != &entity.isometry {
                 entity.isometry = new_isometry.clone();
-                self.scene
-                    .update_object(entity_id, object::transform(&entity.mesh, &entity.isometry));
+                self.scene.update_object(entity_id, entity.isometry);
             }
         }
 
@@ -262,7 +260,7 @@ impl GameWorld {
 
         // add mesh to scene
         self.scene
-            .add_object(entity_id, object::transform(&mesh, &isometry));
+            .add_object(entity_id, object::transform(&mesh, &isometry), isometry);
 
         self.entities.insert(
             entity_id,

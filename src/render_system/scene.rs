@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use nalgebra::Isometry3;
 use vulkano::{
     acceleration_structure::{
         AccelerationStructure, AccelerationStructureBuildGeometryInfo,
@@ -13,23 +14,40 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        PrimaryCommandBufferAbstract,
+        CopyBufferInfoTyped, PrimaryCommandBufferAbstract,
     },
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
     pipeline::graphics::vertex_input,
-    sync::GpuFuture,
+    sync::{future::FenceSignalFuture, GpuFuture},
     DeviceSize, Packed24_8,
 };
+
+use crate::object;
+
+pub struct Object<Vertex> {
+    object: Vec<Vertex>,
+    isometry: Isometry3<f32>,
+    vertex_buffer: Subbuffer<[Vertex]>,
+    blas: Arc<AccelerationStructure>,
+    blas_build_future: FenceSignalFuture<Box<dyn GpuFuture>>,
+}
+
+enum TopLevelAccelerationStructureState {
+    UpToDate,
+    NeedsUpdate,
+    NeedsRebuild,
+}
+
 /// Corresponds to a TLAS
 pub struct Scene<K, Vertex> {
     queue: Arc<Queue>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    objects: HashMap<K, Vec<Vertex>>,
-    bottom_level_acceleration_structures: HashMap<K, Arc<AccelerationStructure>>,
-    top_level_acceleration_structure: Arc<AccelerationStructure>,
-    tlas_needs_update: bool,
+    objects: HashMap<K, Object<Vertex>>,
+    top_level_vertex_buffer: Option<Subbuffer<[Vertex]>>,
+    tlas: Arc<AccelerationStructure>,
+    tlas_state: TopLevelAccelerationStructureState,
 }
 
 #[allow(dead_code)]
@@ -42,105 +60,145 @@ where
         queue: Arc<Queue>,
         memory_allocator: Arc<dyn MemoryAllocator>,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-        objects: HashMap<K, Vec<Vertex>>,
     ) -> Scene<K, Vertex> {
         // assert that the vertex type must have a field called position
         assert!(Vertex::per_vertex().members.contains_key("position"));
 
-        let bottom_level_acceleration_structures = objects
-            .iter()
-            .map(|(key, object)| {
-                (
-                    key.clone(),
-                    create_bottom_level_acceleration_structure(
-                        memory_allocator.clone(),
-                        &command_buffer_allocator,
-                        queue.clone(),
-                        &[&vertex_buffer(memory_allocator.clone(), [object]).unwrap()],
-                    ),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
-        let top_level_acceleration_structure = create_top_level_acceleration_structure(
+        let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
             memory_allocator.clone(),
             &command_buffer_allocator,
             queue.clone(),
-            &bottom_level_acceleration_structures
-                .values()
-                .map(|v| v as &AccelerationStructure)
-                .collect::<Vec<_>>(),
+            &[],
         );
+
+        // await build
+        tlas_build_future
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
 
         Scene {
             queue,
             command_buffer_allocator,
             memory_allocator,
-            objects,
-            bottom_level_acceleration_structures,
-            top_level_acceleration_structure,
-            tlas_needs_update: false,
+            objects: HashMap::new(),
+            tlas,
+            top_level_vertex_buffer: None,
+            tlas_state: TopLevelAccelerationStructureState::UpToDate,
         }
     }
 
-    pub fn add_object(&mut self, key: K, object: Vec<Vertex>) {
-        self.bottom_level_acceleration_structures.insert(
-            key.clone(),
-            create_bottom_level_acceleration_structure(
-                self.memory_allocator.clone(),
-                &self.command_buffer_allocator,
-                self.queue.clone(),
-                &[&vertex_buffer(self.memory_allocator.clone(), [&object]).unwrap()],
-            ),
+    // adds a new object to the scene with the given isometry
+    pub fn add_object(&mut self, key: K, object: Vec<Vertex>, isometry: Isometry3<f32>) {
+        let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [&object]);
+        let (blas, blas_build_future) = create_bottom_level_acceleration_structure(
+            self.memory_allocator.clone(),
+            &self.command_buffer_allocator,
+            self.queue.clone(),
+            &[&vertex_buffer],
         );
-        self.objects.insert(key, object);
-        self.tlas_needs_update = true;
+        self.objects.insert(
+            key,
+            Object {
+                object,
+                isometry,
+                vertex_buffer,
+                blas,
+                blas_build_future: blas_build_future.then_signal_fence_and_flush().unwrap(),
+            },
+        );
+        self.tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
     }
 
-    pub fn update_object(&mut self, key: K, object: Vec<Vertex>) {
-        self.bottom_level_acceleration_structures.insert(
-            key.clone(),
-            create_bottom_level_acceleration_structure(
-                self.memory_allocator.clone(),
-                &self.command_buffer_allocator,
-                self.queue.clone(),
-                &[&vertex_buffer(self.memory_allocator.clone(), [&object]).unwrap()],
-            ),
-        );
-        self.objects.insert(key, object);
-        self.tlas_needs_update = true;
+    // updates the isometry of the object with the given key
+    pub fn update_object(&mut self, key: K, isometry: Isometry3<f32>) {
+        // let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [&object]);
+        // let (blas, blas_build_future) = create_bottom_level_acceleration_structure(
+        //     self.memory_allocator.clone(),
+        //     &self.command_buffer_allocator,
+        //     self.queue.clone(),
+        //     &[&vertex_buffer],
+        // );
+        // self.objects.insert(
+        //     key,
+        //     Object {
+        //         object,
+        //         isometry,
+        //         vertex_buffer,
+        //         blas,
+        //         blas_build_future,
+        //     },
+        // );
+        // self.tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
     }
 
     pub fn remove_object(&mut self, key: K) {
-        self.objects.remove(&key);
-        let removed = self.bottom_level_acceleration_structures.remove(&key);
+        let removed = self.objects.remove(&key);
         if removed.is_some() {
-            self.tlas_needs_update = true;
+            self.tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
         }
     }
 
     pub fn top_level_acceleration_structure(&mut self) -> Arc<AccelerationStructure> {
-        if self.tlas_needs_update {
-            self.top_level_acceleration_structure = create_top_level_acceleration_structure(
-                self.memory_allocator.clone(),
-                &self.command_buffer_allocator,
-                self.queue.clone(),
-                &self
-                    .bottom_level_acceleration_structures
-                    .values()
-                    .map(|v| v as &AccelerationStructure)
-                    .collect::<Vec<_>>(),
-            );
-            self.tlas_needs_update = false;
+        match self.tlas_state {
+            TopLevelAccelerationStructureState::UpToDate => {}
+            TopLevelAccelerationStructureState::NeedsUpdate => todo!(),
+            TopLevelAccelerationStructureState::NeedsRebuild => {
+                // start building the tlas vertex buffer
+                let (top_level_vertex_buffer, top_level_vertex_buffer_future) = tlas_vertex_buffer(
+                    self.queue.clone(),
+                    self.memory_allocator.clone(),
+                    &self.command_buffer_allocator,
+                    self.objects
+                        .values()
+                        .map(|Object { vertex_buffer, .. }| vertex_buffer)
+                        .cloned()
+                        .collect(),
+                );
+
+                // actually submit future
+                let top_level_vertex_buffer_future = top_level_vertex_buffer_future
+                    .then_signal_fence_and_flush()
+                    .unwrap();
+
+                // await all the blas futures on the cpu
+                for object in self.objects.values() {
+                    object.blas_build_future.wait(None).unwrap();
+                }
+
+                let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
+                    self.memory_allocator.clone(),
+                    &self.command_buffer_allocator,
+                    self.queue.clone(),
+                    &self
+                        .objects
+                        .values()
+                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
+                        .collect::<Vec<_>>(),
+                );
+
+                // actually submit acceleration structure build future
+                let tlas_build_future = tlas_build_future.then_signal_fence_and_flush().unwrap();
+
+                // await both futures
+                top_level_vertex_buffer_future.wait(None).unwrap();
+                tlas_build_future.wait(None).unwrap();
+
+                // update state
+                self.tlas = tlas;
+                self.top_level_vertex_buffer = Some(top_level_vertex_buffer);
+                self.tlas_state = TopLevelAccelerationStructureState::UpToDate;
+            }
         }
-        return self.top_level_acceleration_structure.clone();
+        return self.tlas.clone();
     }
 }
 
-fn vertex_buffer<'a, Vertex, Container>(
+fn blas_vertex_buffer<'a, Vertex, Container>(
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: Container,
-) -> Option<Subbuffer<[Vertex]>>
+) -> Subbuffer<[Vertex]>
 where
     Container: IntoIterator<Item = &'a Vec<Vertex>>,
     Vertex: Clone + BufferContents,
@@ -150,27 +208,71 @@ where
         .flatten()
         .cloned()
         .collect::<Vec<Vertex>>();
-    if vertexes.len() == 0 {
-        return None;
-    } else {
-        let buffer = Buffer::from_iter(
-            memory_allocator,
-            BufferCreateInfo {
-                usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                    | BufferUsage::SHADER_DEVICE_ADDRESS,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            vertexes,
-        )
-        .unwrap();
 
-        return Some(buffer);
+    Buffer::from_iter(
+        memory_allocator,
+        BufferCreateInfo {
+            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                | BufferUsage::SHADER_DEVICE_ADDRESS
+                | BufferUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        vertexes,
+    )
+    .unwrap()
+}
+
+// constructs a vertex buffer consisting of all the vertexes in the blas_vertex_buffers
+// returns the vertex buffer + a future of when the copy is complete
+fn tlas_vertex_buffer<Vertex>(
+    queue: Arc<Queue>,
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    command_buffer_allocator: &StandardCommandBufferAllocator,
+    blas_vertex_buffers: Vec<Subbuffer<[Vertex]>>,
+) -> (Subbuffer<[Vertex]>, Box<dyn GpuFuture>)
+where
+    Vertex: Clone + BufferContents,
+{
+    // create one time command buffer
+    let mut builder = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator,
+        queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    let dest_buffer = Buffer::new_slice::<Vertex>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::SHADER_DEVICE_ADDRESS,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        blas_vertex_buffers.iter().map(|buffer| buffer.len()).sum(),
+    )
+    .unwrap();
+
+    // create buffer of all vertexes
+    let mut dest_buffer_offset_elems = 0;
+    for blas_vertex_buffer in blas_vertex_buffers {
+        let mut cbi = CopyBufferInfoTyped::buffers(blas_vertex_buffer.clone(), dest_buffer.clone());
+        cbi.regions[0].dst_offset = dest_buffer_offset_elems;
+        builder.copy_buffer(cbi).unwrap();
+        dest_buffer_offset_elems += blas_vertex_buffer.len();
     }
+
+    // submit buffer
+    let future = builder.build().unwrap().execute(queue).unwrap().boxed();
+
+    (dest_buffer, future)
 }
 
 fn create_top_level_acceleration_structure(
@@ -178,7 +280,7 @@ fn create_top_level_acceleration_structure(
     command_buffer_allocator: &StandardCommandBufferAllocator,
     queue: Arc<Queue>,
     bottom_level_acceleration_structures: &[&AccelerationStructure],
-) -> Arc<AccelerationStructure> {
+) -> (Arc<AccelerationStructure>, Box<dyn GpuFuture>) {
     let mut instances = bottom_level_acceleration_structures
         .iter()
         .map(
@@ -257,7 +359,7 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
     command_buffer_allocator: &StandardCommandBufferAllocator,
     queue: Arc<Queue>,
     vertex_buffers: &[&Subbuffer<[T]>],
-) -> Arc<AccelerationStructure> {
+) -> (Arc<AccelerationStructure>, Box<dyn GpuFuture>) {
     let description = T::per_vertex();
 
     assert_eq!(description.stride, std::mem::size_of::<T>() as u32);
@@ -365,7 +467,7 @@ fn build_acceleration_structure(
     mut build_info: AccelerationStructureBuildGeometryInfo,
     max_primitive_counts: &[u32],
     build_range_infos: impl IntoIterator<Item = AccelerationStructureBuildRangeInfo>,
-) -> Arc<AccelerationStructure> {
+) -> (Arc<AccelerationStructure>, Box<dyn GpuFuture>) {
     let device = memory_allocator.device();
 
     let AccelerationStructureBuildSizesInfo {
@@ -401,13 +503,8 @@ fn build_acceleration_structure(
     }
 
     let command_buffer = builder.build().unwrap();
-    command_buffer
-        .execute(queue)
-        .unwrap()
-        .then_signal_fence_and_flush()
-        .unwrap()
-        .wait(None)
-        .unwrap();
 
-    acceleration_structure
+    let future = command_buffer.execute(queue).unwrap().boxed();
+
+    (acceleration_structure, future)
 }

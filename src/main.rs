@@ -115,7 +115,7 @@ fn build_scene(
         1,
         EntityCreationData {
             physics: None,
-            mesh: object::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5, 1.0]),
+            mesh: object::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
             isometry: Isometry3::identity(),
         },
     );
@@ -128,7 +128,7 @@ fn build_scene(
             mesh: object::flat_polyline(
                 rd.iter().map(|v| v + Vector3::new(0.0, 0.1, 0.0)).collect(),
                 0.1,
-                [1.0, 1.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
             ),
             isometry: Isometry3::identity(),
         },
@@ -139,7 +139,7 @@ fn build_scene(
         3,
         EntityCreationData {
             physics: Some(EntityCreationPhysicsData { is_dynamic: false }),
-            mesh: object::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5, 1.0]),
+            mesh: object::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]),
             isometry: Isometry3::identity(),
         },
     );

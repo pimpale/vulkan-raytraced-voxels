@@ -2,7 +2,7 @@ use nalgebra::{Isometry3, Point3, Vector3};
 
 use crate::render_system::vertex::Vertex3D as Vertex;
 
-pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 4]) -> Vec<Vertex> {
+pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 3]) -> Vec<Vertex> {
     let points: Vec<Vector3<f32>> = points
         .iter()
         .map(|p| Vector3::new(p[0], p[1], p[2]))
@@ -19,7 +19,7 @@ pub fn polyline(
     points: Vec<Vector3<f32>>,
     normals: Vec<Vector3<f32>>,
     width: Vec<f32>,
-    colors: Vec<[f32; 4]>,
+    colors: Vec<[f32; 3]>,
 ) -> Vec<Vertex> {
     assert!(points.len() > 1, "not enough points");
     assert!(
@@ -96,14 +96,14 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex> {
     let y = loc[1];
     let z = loc[2];
 
-    let lbu = Vertex::new([x - xsize, y + ysize, z - zsize], [0.5, 0.9, 0.9, 1.0]);
-    let rbu = Vertex::new([x + xsize, y + ysize, z - zsize], [0.5, 0.5, 0.9, 1.0]);
-    let lfu = Vertex::new([x - xsize, y + ysize, z + zsize], [0.9, 0.5, 0.9, 1.0]);
-    let rfu = Vertex::new([x + xsize, y + ysize, z + zsize], [0.5, 0.9, 0.9, 1.0]);
-    let lbl = Vertex::new([x - xsize, y - ysize, z - zsize], [0.5, 0.5, 0.3, 1.0]);
-    let rbl = Vertex::new([x + xsize, y - ysize, z - zsize], [0.9, 0.5, 0.3, 1.0]);
-    let lfl = Vertex::new([x - xsize, y - ysize, z + zsize], [0.5, 0.5, 0.3, 1.0]);
-    let rfl = Vertex::new([x + xsize, y - ysize, z + zsize], [0.0, 0.0, 0.3, 1.0]);
+    let lbu = Vertex::new([x - xsize, y + ysize, z - zsize], [0.5, 0.9, 0.9]);
+    let rbu = Vertex::new([x + xsize, y + ysize, z - zsize], [0.5, 0.5, 0.9]);
+    let lfu = Vertex::new([x - xsize, y + ysize, z + zsize], [0.9, 0.5, 0.9]);
+    let rfu = Vertex::new([x + xsize, y + ysize, z + zsize], [0.5, 0.9, 0.9]);
+    let lbl = Vertex::new([x - xsize, y - ysize, z - zsize], [0.5, 0.5, 0.3]);
+    let rbl = Vertex::new([x + xsize, y - ysize, z - zsize], [0.9, 0.5, 0.3]);
+    let lfl = Vertex::new([x - xsize, y - ysize, z + zsize], [0.5, 0.5, 0.3]);
+    let rfl = Vertex::new([x + xsize, y - ysize, z + zsize], [0.0, 0.0, 0.3]);
 
     vec![
         lbu, rbu, lfu, lfu, rfu, rbu, // upper square
@@ -123,7 +123,7 @@ pub fn transform(vec: &Vec<Vertex>, isometry: &Isometry3<f32>) -> Vec<Vertex> {
     vec.iter()
         .map(|v| {
             let loc: Point3<f32> = isometry * Point3::from(v.position);
-            Vertex::new(loc.into(), v.color)
+            Vertex::new(loc.into(), v.tuv)
         })
         .collect()
 }
