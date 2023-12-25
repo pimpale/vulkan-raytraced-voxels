@@ -1,4 +1,4 @@
-use nalgebra::{Isometry3, Point3, Vector3};
+use nalgebra::{Point3, Vector3};
 
 use crate::render_system::vertex::Vertex3D as Vertex;
 

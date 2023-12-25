@@ -1,10 +1,6 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt::Debug,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
 
-use nalgebra::{Isometry3, Matrix4, Matrix4x3};
+use nalgebra::{Isometry3, Matrix4};
 use vulkano::{
     acceleration_structure::{
         AccelerationStructure, AccelerationStructureBuildGeometryInfo,
@@ -26,8 +22,6 @@ use vulkano::{
     sync::{future::FenceSignalFuture, GpuFuture},
     DeviceSize, Packed24_8,
 };
-
-use crate::object;
 
 pub struct Object<Vertex> {
     object: Vec<Vertex>,
@@ -261,7 +255,6 @@ where
                 dbg!(self.tl_vertex_buffer.len());
                 dbg!(&self.tl_vertex_buffer.read().unwrap().to_vec()[0]);
                 dbg!(self.tl_geometry_offset_buffer.read().unwrap().to_vec());
-
             }
         }
 

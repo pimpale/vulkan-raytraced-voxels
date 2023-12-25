@@ -22,8 +22,7 @@ pub mod fs {
         src: r"
             #version 460
             #extension GL_EXT_ray_query: enable
-            #extension GL_EXT_debug_printf: enable
-            
+
             precision highp float;
 
 
@@ -70,7 +69,7 @@ pub mod fs {
                 rayQueryInitializeEXT(
                     ray_query,
                     top_level_acceleration_structure,
-                    gl_RayFlagsCullBackFacingTrianglesEXT,
+                    0,
                     0xFF,
                     origin,
                     t_min,
@@ -90,7 +89,7 @@ pub mod fs {
                     uint instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
 
                     vec2 bary = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
-                    vec3 bary3 = vec3(bary.x, bary.y, 1.0 - bary.x - bary.y);
+                    vec3 bary3 = vec3(1.0 - bary.x - bary.y,  bary.x, bary.y);
 
                     uint base_offset = geometry_offset_buffer[instance_index] + 3*primitive_index;
 
