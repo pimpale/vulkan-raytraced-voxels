@@ -96,9 +96,9 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex> {
     let y = loc[1];
     let z = loc[2];
 
-    let lbu = Vertex::new([x - xsize, y + ysize, z - zsize], [0.5, 0.9, 0.9]);
-    let rbu = Vertex::new([x + xsize, y + ysize, z - zsize], [0.5, 0.5, 0.9]);
-    let lfu = Vertex::new([x - xsize, y + ysize, z + zsize], [0.9, 0.5, 0.9]);
+    let lbu = Vertex::new([x - xsize, y + ysize, z - zsize], [1.0, 2.0, 3.0]);
+    let rbu = Vertex::new([x + xsize, y + ysize, z - zsize], [4.0, 5.0, 6.0]);
+    let lfu = Vertex::new([x - xsize, y + ysize, z + zsize], [7.0, 8.0, 9.0]);
     let rfu = Vertex::new([x + xsize, y + ysize, z + zsize], [0.5, 0.9, 0.9]);
     let lbl = Vertex::new([x - xsize, y - ysize, z - zsize], [0.5, 0.5, 0.3]);
     let rbl = Vertex::new([x + xsize, y - ysize, z - zsize], [0.9, 0.5, 0.3]);

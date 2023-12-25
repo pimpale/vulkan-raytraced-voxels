@@ -1,3 +1,4 @@
+use core::panic;
 use std::sync::Arc;
 
 use nalgebra::{Matrix4, Point3, Vector3};
@@ -43,7 +44,10 @@ use vulkano::{
 };
 use winit::window::Window;
 
-use super::shader::{fs, vs};
+use super::{
+    shader::{fs, vs},
+    vertex::Vertex3D,
+};
 
 pub fn get_device_for_rendering_on(
     instance: Arc<Instance>,
@@ -331,6 +335,8 @@ impl Renderer {
     pub fn render(
         &mut self,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
+        top_level_geometry_offset_buffer: Subbuffer<[u32]>,
+        top_level_vertex_buffer: Subbuffer<[Vertex3D]>,
         eye: Point3<f32>,
         front: Vector3<f32>,
         right: Vector3<f32>,
@@ -381,13 +387,15 @@ impl Renderer {
         let descriptor_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
             self.pipeline.layout().set_layouts().get(0).unwrap().clone(),
-            [WriteDescriptorSet::acceleration_structure(
-                0,
-                top_level_acceleration_structure,
-            )],
+            [
+                WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
+                WriteDescriptorSet::buffer(1, top_level_geometry_offset_buffer),
+                WriteDescriptorSet::buffer(2, top_level_vertex_buffer),
+            ],
             [],
         )
         .unwrap();
+
 
         builder
             .begin_rendering(RenderingInfo {

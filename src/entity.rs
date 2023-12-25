@@ -260,7 +260,7 @@ impl GameWorld {
 
         // add mesh to scene
         self.scene
-            .add_object(entity_id, object::transform(&mesh, &isometry), isometry);
+            .add_object(entity_id, mesh.clone(), isometry);
 
         self.entities.insert(
             entity_id,
@@ -276,10 +276,17 @@ impl GameWorld {
     /// Note that all offscreen rendering is done during `step`
     pub fn render(&mut self) {
         if let Some(ref mut per_window_state) = self.per_window_state {
-            let extent = interactive_rendering::get_surface_extent(&per_window_state.surface);
             let (eye, front, right, up) = per_window_state.camera.eye_front_right_up();
+            let (
+                top_level_acceleration_structure,
+                top_level_geometry_offset_buffer,
+                top_level_vertex_buffer,
+            ) = self.scene.tlas();
+            // render to screen
             per_window_state.renderer.render(
-                self.scene.top_level_acceleration_structure(),
+                top_level_acceleration_structure,
+                top_level_geometry_offset_buffer,
+                top_level_vertex_buffer,
                 eye,
                 front,
                 right,

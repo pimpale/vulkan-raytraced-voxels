@@ -1,6 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    sync::Arc,
+};
 
-use nalgebra::Isometry3;
+use nalgebra::{Isometry3, Matrix4, Matrix4x3};
 use vulkano::{
     acceleration_structure::{
         AccelerationStructure, AccelerationStructureBuildGeometryInfo,
@@ -33,6 +37,7 @@ pub struct Object<Vertex> {
     blas_build_future: FenceSignalFuture<Box<dyn GpuFuture>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TopLevelAccelerationStructureState {
     UpToDate,
     NeedsUpdate,
@@ -44,8 +49,9 @@ pub struct Scene<K, Vertex> {
     queue: Arc<Queue>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    objects: HashMap<K, Object<Vertex>>,
-    top_level_vertex_buffer: Option<Subbuffer<[Vertex]>>,
+    objects: BTreeMap<K, Object<Vertex>>,
+    tl_geometry_offset_buffer: Subbuffer<[u32]>,
+    tl_vertex_buffer: Subbuffer<[Vertex]>,
     tlas: Arc<AccelerationStructure>,
     tlas_state: TopLevelAccelerationStructureState,
 }
@@ -53,8 +59,8 @@ pub struct Scene<K, Vertex> {
 #[allow(dead_code)]
 impl<K, Vertex> Scene<K, Vertex>
 where
-    Vertex: vertex_input::Vertex + Clone + BufferContents,
-    K: Clone + std::cmp::Eq + std::hash::Hash,
+    Vertex: vertex_input::Vertex + Default + Clone + BufferContents + Debug,
+    K: Ord + Clone + std::cmp::Eq + std::hash::Hash,
 {
     pub fn new(
         queue: Arc<Queue>,
@@ -65,6 +71,7 @@ where
         assert!(Vertex::per_vertex().members.contains_key("position"));
 
         let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
+            None,
             memory_allocator.clone(),
             &command_buffer_allocator,
             queue.clone(),
@@ -78,13 +85,29 @@ where
             .wait(None)
             .unwrap();
 
+        let (tl_vertex_buffer, tl_geometry_offset_buffer, tlas_vertex_buffer_future) =
+            tlas_vertex_buffer(
+                queue.clone(),
+                memory_allocator.clone(),
+                &command_buffer_allocator,
+                vec![],
+            );
+
+        // await vertex buffer
+        tlas_vertex_buffer_future
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
         Scene {
             queue,
             command_buffer_allocator,
             memory_allocator,
-            objects: HashMap::new(),
+            objects: BTreeMap::new(),
             tlas,
-            top_level_vertex_buffer: None,
+            tl_vertex_buffer,
+            tl_geometry_offset_buffer,
             tlas_state: TopLevelAccelerationStructureState::UpToDate,
         }
     }
@@ -93,10 +116,12 @@ where
     pub fn add_object(&mut self, key: K, object: Vec<Vertex>, isometry: Isometry3<f32>) {
         let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [&object]);
         let (blas, blas_build_future) = create_bottom_level_acceleration_structure(
+            None,
             self.memory_allocator.clone(),
             &self.command_buffer_allocator,
             self.queue.clone(),
             &[&vertex_buffer],
+            isometry,
         );
         self.objects.insert(
             key,
@@ -113,24 +138,26 @@ where
 
     // updates the isometry of the object with the given key
     pub fn update_object(&mut self, key: K, isometry: Isometry3<f32>) {
-        // let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [&object]);
-        // let (blas, blas_build_future) = create_bottom_level_acceleration_structure(
-        //     self.memory_allocator.clone(),
-        //     &self.command_buffer_allocator,
-        //     self.queue.clone(),
-        //     &[&vertex_buffer],
-        // );
-        // self.objects.insert(
-        //     key,
-        //     Object {
-        //         object,
-        //         isometry,
-        //         vertex_buffer,
-        //         blas,
-        //         blas_build_future,
-        //     },
-        // );
-        // self.tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
+        match self.objects.get_mut(&key) {
+            Some(object) => {
+                object.isometry = isometry;
+                object.blas_build_future.wait(None).unwrap();
+                let (blas, blas_build_future) = create_bottom_level_acceleration_structure(
+                    Some(object.blas.clone()),
+                    self.memory_allocator.clone(),
+                    &self.command_buffer_allocator,
+                    self.queue.clone(),
+                    &[&object.vertex_buffer],
+                    isometry,
+                );
+                object.blas = blas;
+                object.blas_build_future = blas_build_future.then_signal_fence_and_flush().unwrap();
+                if self.tlas_state == TopLevelAccelerationStructureState::UpToDate {
+                    self.tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
+                }
+            }
+            None => panic!("object with key does not exist"),
+        }
     }
 
     pub fn remove_object(&mut self, key: K) {
@@ -140,25 +167,62 @@ where
         }
     }
 
-    pub fn top_level_acceleration_structure(&mut self) -> Arc<AccelerationStructure> {
+    pub fn tlas(
+        &mut self,
+    ) -> (
+        Arc<AccelerationStructure>,
+        Subbuffer<[u32]>,
+        Subbuffer<[Vertex]>,
+    ) {
         match self.tlas_state {
             TopLevelAccelerationStructureState::UpToDate => {}
-            TopLevelAccelerationStructureState::NeedsUpdate => todo!(),
-            TopLevelAccelerationStructureState::NeedsRebuild => {
-                // start building the tlas vertex buffer
-                let (top_level_vertex_buffer, top_level_vertex_buffer_future) = tlas_vertex_buffer(
-                    self.queue.clone(),
+            // if the tlas needs to be updated, then we just need to rebuild it (and nothing else)
+            TopLevelAccelerationStructureState::NeedsUpdate => {
+                // await all the blas futures on the cpu
+                for object in self.objects.values() {
+                    object.blas_build_future.wait(None).unwrap();
+                }
+
+                let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
+                    Some(self.tlas.clone()),
                     self.memory_allocator.clone(),
                     &self.command_buffer_allocator,
-                    self.objects
+                    self.queue.clone(),
+                    &self
+                        .objects
                         .values()
-                        .map(|Object { vertex_buffer, .. }| vertex_buffer)
-                        .cloned()
-                        .collect(),
+                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
+                        .collect::<Vec<_>>(),
                 );
 
+                // wait for build
+                tlas_build_future
+                    .then_signal_fence_and_flush()
+                    .unwrap()
+                    .wait(None)
+                    .unwrap();
+
+                // update state
+                self.tlas = tlas;
+                self.tlas_state = TopLevelAccelerationStructureState::UpToDate;
+            }
+            // if the tlas needs to be rebuilt, then we need to build both the tlas and the vertex buffer data
+            TopLevelAccelerationStructureState::NeedsRebuild => {
+                // start building the tlas vertex buffer
+                let (tlas_vertex_buffer, tlas_geometry_offset_buffer, tlas_vertex_buffer_future) =
+                    tlas_vertex_buffer(
+                        self.queue.clone(),
+                        self.memory_allocator.clone(),
+                        &self.command_buffer_allocator,
+                        self.objects
+                            .values()
+                            .map(|Object { vertex_buffer, .. }| vertex_buffer)
+                            .cloned()
+                            .collect(),
+                    );
+
                 // actually submit future
-                let top_level_vertex_buffer_future = top_level_vertex_buffer_future
+                let top_level_vertex_buffer_future = tlas_vertex_buffer_future
                     .then_signal_fence_and_flush()
                     .unwrap();
 
@@ -167,7 +231,9 @@ where
                     object.blas_build_future.wait(None).unwrap();
                 }
 
+                // initialize tlas build
                 let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
+                    None,
                     self.memory_allocator.clone(),
                     &self.command_buffer_allocator,
                     self.queue.clone(),
@@ -187,11 +253,24 @@ where
 
                 // update state
                 self.tlas = tlas;
-                self.top_level_vertex_buffer = Some(top_level_vertex_buffer);
+                self.tl_vertex_buffer = tlas_vertex_buffer;
+                self.tl_geometry_offset_buffer = tlas_geometry_offset_buffer;
                 self.tlas_state = TopLevelAccelerationStructureState::UpToDate;
+
+                // print top level geometry offset buffer
+                dbg!(self.tl_vertex_buffer.len());
+                dbg!(&self.tl_vertex_buffer.read().unwrap().to_vec()[0]);
+                dbg!(self.tl_geometry_offset_buffer.read().unwrap().to_vec());
+
             }
         }
-        return self.tlas.clone();
+
+        // return the tlas
+        return (
+            self.tlas.clone(),
+            self.tl_geometry_offset_buffer.clone(),
+            self.tl_vertex_buffer.clone(),
+        );
     }
 }
 
@@ -201,7 +280,7 @@ fn blas_vertex_buffer<'a, Vertex, Container>(
 ) -> Subbuffer<[Vertex]>
 where
     Container: IntoIterator<Item = &'a Vec<Vertex>>,
-    Vertex: Clone + BufferContents,
+    Vertex: Default + Clone + BufferContents,
 {
     let vertexes = objects
         .into_iter()
@@ -233,11 +312,32 @@ fn tlas_vertex_buffer<Vertex>(
     queue: Arc<Queue>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: &StandardCommandBufferAllocator,
-    blas_vertex_buffers: Vec<Subbuffer<[Vertex]>>,
-) -> (Subbuffer<[Vertex]>, Box<dyn GpuFuture>)
+    mut blas_vertex_buffers: Vec<Subbuffer<[Vertex]>>,
+) -> (Subbuffer<[Vertex]>, Subbuffer<[u32]>, Box<dyn GpuFuture>)
 where
-    Vertex: Clone + BufferContents,
+    Vertex: Clone + Default + BufferContents,
 {
+    // if there are no vertex buffers, then we create a dummy vertex buffer to permit the TLAS to be built
+    if blas_vertex_buffers.len() == 0 {
+        let dummy_vertex_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            vec![Vertex::default(), Vertex::default(), Vertex::default()],
+        )
+        .unwrap();
+        blas_vertex_buffers.push(dummy_vertex_buffer);
+        println!("created dummy vertex buffer");
+    }
+    println!("blas_vertex_buffers.len() = {}", blas_vertex_buffers.len());
+
     // create one time command buffer
     let mut builder = AutoCommandBufferBuilder::primary(
         command_buffer_allocator,
@@ -246,36 +346,60 @@ where
     )
     .unwrap();
 
-    let dest_buffer = Buffer::new_slice::<Vertex>(
+    let tlas_vertex_buffer = Buffer::new_slice::<Vertex>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::TRANSFER_DST | BufferUsage::SHADER_DEVICE_ADDRESS,
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
             ..Default::default()
         },
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
             ..Default::default()
         },
         blas_vertex_buffers.iter().map(|buffer| buffer.len()).sum(),
     )
     .unwrap();
 
-    // create buffer of all vertexes
-    let mut dest_buffer_offset_elems = 0;
-    for blas_vertex_buffer in blas_vertex_buffers {
-        let mut cbi = CopyBufferInfoTyped::buffers(blas_vertex_buffer.clone(), dest_buffer.clone());
-        cbi.regions[0].dst_offset = dest_buffer_offset_elems;
-        builder.copy_buffer(cbi).unwrap();
-        dest_buffer_offset_elems += blas_vertex_buffer.len();
+    // find the geometry offsets
+    let mut geometry_offsets = Vec::new();
+    let mut cur_geometry_offset = 0;
+    for blas_vertex_buffer in blas_vertex_buffers.iter() {
+        geometry_offsets.push(cur_geometry_offset);
+        cur_geometry_offset += blas_vertex_buffer.len() as u32;
     }
+
+    // create buffer of all vertexes
+    for (i, blas_vertex_buffer) in blas_vertex_buffers.iter().enumerate() {
+        let mut cbi =
+            CopyBufferInfoTyped::buffers(blas_vertex_buffer.clone(), tlas_vertex_buffer.clone());
+        cbi.regions[0].dst_offset = geometry_offsets[i] as u64;
+        builder.copy_buffer(cbi).unwrap();
+    }
+
+    let tlas_geometry_offset_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        geometry_offsets,
+    )
+    .unwrap();
 
     // submit buffer
     let future = builder.build().unwrap().execute(queue).unwrap().boxed();
 
-    (dest_buffer, future)
+    (tlas_vertex_buffer, tlas_geometry_offset_buffer, future)
 }
 
 fn create_top_level_acceleration_structure(
+    previous_acceleration_structure: Option<Arc<AccelerationStructure>>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: &StandardCommandBufferAllocator,
     queue: Arc<Queue>,
@@ -332,7 +456,10 @@ fn create_top_level_acceleration_structure(
     let build_info = AccelerationStructureBuildGeometryInfo {
         flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE
             | BuildAccelerationStructureFlags::ALLOW_UPDATE,
-        mode: BuildAccelerationStructureMode::Build,
+        mode: match previous_acceleration_structure {
+            Some(p) => BuildAccelerationStructureMode::Update(p),
+            None => BuildAccelerationStructureMode::Build,
+        },
         ..AccelerationStructureBuildGeometryInfo::new(geometries)
     };
 
@@ -355,10 +482,12 @@ fn create_top_level_acceleration_structure(
 }
 
 fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::Vertex>(
+    previous_acceleration_structure: Option<Arc<AccelerationStructure>>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     command_buffer_allocator: &StandardCommandBufferAllocator,
     queue: Arc<Queue>,
     vertex_buffers: &[&Subbuffer<[T]>],
+    isometry: Isometry3<f32>,
 ) -> (Arc<AccelerationStructure>, Box<dyn GpuFuture>) {
     let description = T::per_vertex();
 
@@ -368,6 +497,25 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
     let mut max_primitive_counts = vec![];
     let mut build_range_infos = vec![];
 
+    let isometry_matrix: [[f32; 4]; 4] = Matrix4::from(isometry).transpose().into();
+
+    // create transform data
+    let transform_data = Buffer::from_data(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
+                | BufferUsage::SHADER_DEVICE_ADDRESS,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        [isometry_matrix[0], isometry_matrix[1], isometry_matrix[2]],
+    )
+    .unwrap();
+
     for &vertex_buffer in vertex_buffers {
         let primitive_count = vertex_buffer.len() as u32 / 3;
         triangles.push(AccelerationStructureGeometryTrianglesData {
@@ -376,7 +524,7 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
             vertex_stride: description.stride,
             max_vertex: vertex_buffer.len() as _,
             index_data: None,
-            transform_data: None,
+            transform_data: Some(transform_data.clone()),
             ..AccelerationStructureGeometryTrianglesData::new(
                 description.members.get("position").unwrap().format,
             )
@@ -394,7 +542,10 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
     let build_info = AccelerationStructureBuildGeometryInfo {
         flags: BuildAccelerationStructureFlags::PREFER_FAST_TRACE
             | BuildAccelerationStructureFlags::ALLOW_UPDATE,
-        mode: BuildAccelerationStructureMode::Build,
+        mode: match previous_acceleration_structure {
+            Some(p) => BuildAccelerationStructureMode::Update(p),
+            None => BuildAccelerationStructureMode::Build,
+        },
         ..AccelerationStructureBuildGeometryInfo::new(geometries)
     };
 
@@ -417,7 +568,7 @@ fn create_acceleration_structure(
     let buffer = Buffer::new_slice::<u8>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::ACCELERATION_STRUCTURE_STORAGE,
+            usage: BufferUsage::ACCELERATION_STRUCTURE_STORAGE | BufferUsage::SHADER_DEVICE_ADDRESS,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -444,7 +595,14 @@ fn create_scratch_buffer(
     memory_allocator: Arc<dyn MemoryAllocator>,
     size: DeviceSize,
 ) -> Subbuffer<[u8]> {
-    Buffer::new_slice::<u8>(
+    let alignment_requirement = memory_allocator
+        .device()
+        .physical_device()
+        .properties()
+        .min_acceleration_structure_scratch_offset_alignment
+        .unwrap() as DeviceSize;
+
+    let subbuffer = Buffer::new_slice::<u8>(
         memory_allocator,
         BufferCreateInfo {
             usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
@@ -454,9 +612,20 @@ fn create_scratch_buffer(
             memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         },
-        size,
+        size + alignment_requirement,
     )
-    .unwrap()
+    .unwrap();
+
+    // get the next aligned offset
+    let subbuffer_address: DeviceSize = subbuffer.device_address().unwrap().into();
+    let aligned_offset = alignment_requirement - (subbuffer_address % alignment_requirement);
+
+    // slice the buffer to the aligned offset
+    let subbuffer2 = subbuffer.slice(aligned_offset..(aligned_offset + size));
+    assert!(u64::from(subbuffer2.device_address().unwrap()) % alignment_requirement == 0);
+    assert!(subbuffer2.size() == size);
+
+    return subbuffer2;
 }
 
 fn build_acceleration_structure(

@@ -22,11 +22,29 @@ pub mod fs {
         src: r"
             #version 460
             #extension GL_EXT_ray_query: enable
+            #extension GL_EXT_debug_printf: enable
+            
+            precision highp float;
+
+
+            struct Vertex {
+                vec3 position;
+                vec3 tuv;
+            };
 
             layout(location = 0) in vec2 in_uv;
             layout(location = 0) out vec4 f_color;
             
             layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
+            
+            layout(set = 0, binding = 1) readonly buffer GeometryOffsetSSBO {
+                uint geometry_offset_buffer[];
+            };
+
+            layout(set = 0, binding = 2, std430) readonly buffer VertexBufferSSBO {
+                Vertex vertex_buffer[];
+                //float vertex_buffer[];
+            };
 
             layout(push_constant) uniform Camera {
                 vec3 eye;
@@ -68,7 +86,18 @@ pub mod fs {
                     f_color = vec4(0.0, 0.0, 0.0, 1.0);
                 } else {
                     // hit
-                    f_color = vec4(rayQueryGetIntersectionBarycentricsEXT(ray_query, true), 0.0, 1.0);
+                    uint primitive_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
+                    uint instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
+
+                    vec2 bary = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
+                    vec3 bary3 = vec3(bary.x, bary.y, 1.0 - bary.x - bary.y);
+
+
+                    uint base_offset = geometry_offset_buffer[instance_index] + 3*primitive_index;
+                    
+                    //vec3 tuv = vertex_buffer[base_offset + 0].tuv * bary3.x + vertex_buffer[base_offset + 1].tuv * bary3.y + vertex_buffer[base_offset + 2].tuv * bary3.z;
+                    
+                    f_color = vec4(vertex_buffer[0].tuv.xyz - vec3(0.95, 1.95, 1.95), 1.0);
                 }
             }
         ",

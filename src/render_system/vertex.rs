@@ -1,6 +1,6 @@
 use vulkano::{buffer::BufferContents, pipeline::graphics::vertex_input::Vertex};
 
-#[derive(Clone, Copy, BufferContents, Vertex)]
+#[derive(Clone, Copy, Debug, BufferContents, Vertex, Default)]
 #[repr(C)]
 pub struct Vertex3D {
     #[format(R32G32B32_SFLOAT)]
