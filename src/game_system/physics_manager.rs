@@ -102,7 +102,11 @@ impl PhysicsManager {
 }
 
 impl Manager for PhysicsManager {
-    fn update<'a>(&mut self, data: UpdateData<'a>, since_last_frame: &Vec<WorldChange>) -> Vec<WorldChange> {
+    fn update<'a>(
+        &mut self,
+        data: UpdateData<'a>,
+        since_last_frame: &Vec<WorldChange>,
+    ) -> Vec<WorldChange> {
         // remove or add any entities that we got rid of last frame
         for world_change in since_last_frame {
             match world_change {
@@ -112,10 +116,21 @@ impl Manager for PhysicsManager {
                 WorldChange::RemoveEntity(id) => {
                     self.remove_entity(*id);
                 }
+                WorldChange::AddImpulseEntity {
+                    id,
+                    velocity,
+                    torque,
+                } => {
+                    if let Some(handle) = self.entities.get(id) {
+                        let rigid_body = self.rigid_body_set.get_mut(*handle).unwrap();
+                        rigid_body.apply_impulse(*velocity, true);
+                        rigid_body.apply_torque_impulse(*torque, true);
+                    }
+                }
                 _ => {}
             }
         }
-        
+
         let UpdateData { entities, .. } = data;
         // step physics
         self.physics_pipeline.step(
@@ -147,5 +162,4 @@ impl Manager for PhysicsManager {
             })
             .collect()
     }
-
 }

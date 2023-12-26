@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     entity::WorldChange,
@@ -8,11 +8,11 @@ use crate::{
 use super::manager::{Manager, UpdateData};
 
 pub struct SceneManager {
-    pub scene: Arc<Scene<u32, Vertex3D>>,
+    pub scene: Rc<RefCell<Scene<u32, Vertex3D>>>,
 }
 
 impl SceneManager {
-    pub fn new(scene: Arc<Scene<u32, Vertex3D>>) -> Self {
+    pub fn new(scene: Rc<RefCell<Scene<u32, Vertex3D>>>) -> Self {
         Self { scene }
     }
 }
@@ -24,20 +24,21 @@ impl Manager for SceneManager {
         _: UpdateData<'a>,
         since_last_frame: &Vec<WorldChange>,
     ) -> Vec<WorldChange> {
+        let mut scene = self.scene.borrow_mut();
         for world_change in since_last_frame.iter() {
             match world_change {
                 WorldChange::AddEntity(entity_id, entity_creation_data) => {
-                    self.scene.add_object(
+                    scene.add_object(
                         *entity_id,
                         entity_creation_data.mesh.clone(),
                         entity_creation_data.isometry.clone(),
                     );
                 }
                 WorldChange::RemoveEntity(entity_id) => {
-                    self.scene.remove_object(*entity_id);
+                    scene.remove_object(*entity_id);
                 }
                 WorldChange::UpdateEntityIsometry(entity_id, isometry) => {
-                    self.scene.update_object(*entity_id, isometry.clone())
+                    scene.update_object(*entity_id, isometry.clone())
                 }
                 _ => {}
             }

@@ -60,7 +60,7 @@ impl BlockDefinitionTable {
             })
             .collect();
 
-        for block in blocks {
+        for block in &blocks {
             if block.transparent {
                 continue;
             }

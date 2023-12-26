@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use nalgebra::Isometry3;
@@ -13,18 +15,14 @@ use vulkano::swapchain::Surface;
 
 use crate::camera::InteractiveCamera;
 use crate::game_system::camera_manager::CameraManager;
-use crate::game_system::ego_movement_manager;
 use crate::game_system::ego_movement_manager::EgoMovementManager;
 use crate::game_system::manager::Manager;
-use crate::game_system::physics_manager;
+use crate::game_system::manager::UpdateData;
 use crate::game_system::physics_manager::PhysicsManager;
-use crate::game_system::scene_manager;
 use crate::game_system::scene_manager::SceneManager;
-use crate::handle_user_input::UserInputState;
 use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
 use crate::render_system::vertex::Vertex3D;
-use crate::utils;
 
 pub struct EntityCreationPhysicsData {
     // if true, the object can be moved by the physics engine
@@ -63,14 +61,14 @@ pub enum WorldChange {
 pub struct GameWorld {
     entities: HashMap<u32, Entity>,
     ego_entity_id: u32,
-    scene: Arc<Scene<u32, Vertex3D>>,
-    camera: Arc<Box<dyn InteractiveCamera>>,
+    scene: Rc<RefCell<Scene<u32, Vertex3D>>>,
+    camera: Rc<RefCell<Box<dyn InteractiveCamera>>>,
     surface: Arc<Surface>,
     renderer: interactive_rendering::Renderer,
 
-    // managers
+    // manager data
+    changes_since_last_step: Vec<WorldChange>,
     managers: Vec<Box<dyn Manager>>,
-
 }
 
 impl GameWorld {
@@ -95,15 +93,15 @@ impl GameWorld {
             descriptor_set_allocator.clone(),
         );
 
-        let scene = Arc::new(Scene::new(
+        let scene = Rc::new(RefCell::new(Scene::new(
             queue.clone(),
             memory_allocator.clone(),
             command_buffer_allocator.clone(),
-        ));
+        )));
 
         let scene_manager = SceneManager::new(scene.clone());
 
-        let camera = Arc::new(camera);
+        let camera = Rc::new(RefCell::new(camera));
 
         let camera_manager = CameraManager::new(camera.clone());
 
@@ -112,13 +110,13 @@ impl GameWorld {
         let physics_manager = PhysicsManager::new();
 
         GameWorld {
+            entities: HashMap::new(),
             scene,
             camera,
             ego_entity_id,
             renderer,
             surface,
-
-            entities: HashMap::new(),
+            changes_since_last_step: vec![],
             managers: vec![
                 Box::new(scene_manager),
                 Box::new(camera_manager),
@@ -128,19 +126,73 @@ impl GameWorld {
         }
     }
 
-    pub fn step(&mut self) {}
+    pub fn step(&mut self) {
+        let mut new_changes = vec![];
+        for manager in self.managers.iter_mut() {
+            let data = UpdateData {
+                entities: &self.entities,
+                ego_entity_id: self.ego_entity_id,
+            };
+            // run each manager, and store the changes required
+            new_changes.extend(manager.update(data, &self.changes_since_last_step));
+        }
 
-    pub fn add_entity(&mut self, entity_id: u32, entity_creation_data: EntityCreationData) {}
+        // update entity table
+        for change in &new_changes {
+            match change {
+                WorldChange::AddEntity(entity_id, entity_creation_data) => {
+                    self.entities.insert(
+                        *entity_id,
+                        Entity {
+                            mesh: entity_creation_data.mesh.clone(),
+                            isometry: entity_creation_data.isometry.clone(),
+                        },
+                    );
+                }
+                WorldChange::RemoveEntity(entity_id) => {
+                    self.entities.remove(entity_id);
+                }
+                WorldChange::UpdateEntityIsometry(entity_id, isometry) => {
+                    if let Some(entity) = self.entities.get_mut(entity_id) {
+                        entity.isometry = isometry.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        self.changes_since_last_step = new_changes;
+    }
+
+    // add a new entity to the world
+    pub fn add_entity(&mut self, entity_id: u32, entity_creation_data: EntityCreationData) {
+        self.entities.insert(
+            entity_id,
+            Entity {
+                mesh: entity_creation_data.mesh.clone(),
+                isometry: entity_creation_data.isometry.clone(),
+            },
+        );
+        self.changes_since_last_step
+            .push(WorldChange::AddEntity(entity_id, entity_creation_data));
+    }
+
+    // remove an entity from the world
+    pub fn remove_entity(&mut self, entity_id: u32) {
+        self.entities.remove(&entity_id);
+        self.changes_since_last_step
+            .push(WorldChange::RemoveEntity(entity_id));
+    }
 
     /// render to screen (if interactive rendering is enabled)
     /// Note that all offscreen rendering is done during `step`
     pub fn render(&mut self) {
-        let (eye, front, right, up) = self.camera.eye_front_right_up();
+        let (eye, front, right, up) = self.camera.borrow().eye_front_right_up();
         let (
             top_level_acceleration_structure,
             top_level_geometry_offset_buffer,
             top_level_vertex_buffer,
-        ) = self.scene.tlas();
+        ) = self.scene.borrow_mut().tlas();
         // render to screen
         self.renderer.render(
             top_level_acceleration_structure,
@@ -151,10 +203,6 @@ impl GameWorld {
             right,
             up,
         )
-    }
-
-    pub fn remove_entity(&mut self, entity_id: u32) {
-
     }
 
     pub fn handle_window_event(&mut self, input: &winit::event::WindowEvent) {

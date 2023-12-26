@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use entity::{
-    EntityCreationData, EntityCreationPhysicsData, GameWorld, InteractiveRenderingConfig,
+    EntityCreationData, EntityCreationPhysicsData, GameWorld,
 };
 use nalgebra::{Isometry3, Vector3};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -72,11 +72,9 @@ fn build_scene(
         command_buffer_allocator,
         memory_allocator,
         descriptor_set_allocator,
-        Some(InteractiveRenderingConfig {
-            surface,
-            tracking_entity: 0,
-            camera: Box::new(camera::SphericalCamera::new()),
-        }),
+        0,
+        surface,
+        Box::new(camera::SphericalCamera::new()),
     );
 
     // add ego agent
