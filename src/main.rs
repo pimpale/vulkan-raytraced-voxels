@@ -1,49 +1,28 @@
+use std::sync::Arc;
+
 use entity::{
     EntityCreationData, EntityCreationPhysicsData, GameWorld, InteractiveRenderingConfig,
 };
-use nalgebra::{Isometry, Isometry3, Point3, Vector3};
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::sync::Arc;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage};
+use nalgebra::{Isometry3, Vector3};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
-use vulkano::device::physical::PhysicalDeviceType;
-use vulkano::device::{
-    Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned, QueueCreateInfo, QueueFlags,
-};
-use vulkano::image::view::ImageView;
-use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage};
+use vulkano::swapchain::Surface;
+
 use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
-use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
-use vulkano::pipeline::graphics::depth_stencil::{DepthState, DepthStencilState};
-use vulkano::pipeline::graphics::multisample::MultisampleState;
-use vulkano::pipeline::graphics::rasterization::RasterizationState;
-use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
-use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
-use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
-use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
-use vulkano::pipeline::{
-    GraphicsPipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
-};
-use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass};
-use vulkano::shader::EntryPoint;
-use vulkano::swapchain::{self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo};
-use vulkano::sync::GpuFuture;
-use vulkano::{format::*, Validated, VulkanLibrary};
-use vulkano::{sync, VulkanError};
+use vulkano::memory::allocator::StandardMemoryAllocator;
+
+use vulkano::VulkanLibrary;
 use winit::event_loop::{ControlFlow, EventLoop};
 
-use winit::event::{Event, VirtualKeyCode, WindowEvent};
-use winit::window::{Window, WindowBuilder};
+use winit::event::{Event, WindowEvent};
+use winit::window::WindowBuilder;
 
 mod camera;
 mod entity;
+mod game_system;
 mod handle_user_input;
-mod object;
 mod render_system;
+mod utils;
 
 fn build_scene(
     queue: Arc<vulkano::device::Queue>,
@@ -105,7 +84,7 @@ fn build_scene(
         0,
         EntityCreationData {
             physics: Some(EntityCreationPhysicsData { is_dynamic: true }),
-            mesh: object::unitcube(),
+            mesh: utils::unitcube(),
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
         },
     );
@@ -115,7 +94,7 @@ fn build_scene(
         1,
         EntityCreationData {
             physics: None,
-            mesh: object::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
+            mesh: utils::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
             isometry: Isometry3::identity(),
         },
     );
@@ -125,7 +104,7 @@ fn build_scene(
         2,
         EntityCreationData {
             physics: None,
-            mesh: object::flat_polyline(
+            mesh: utils::flat_polyline(
                 rd.iter().map(|v| v + Vector3::new(0.0, 0.1, 0.0)).collect(),
                 0.1,
                 [1.0, 1.0, 0.0],
@@ -139,7 +118,7 @@ fn build_scene(
         3,
         EntityCreationData {
             physics: Some(EntityCreationPhysicsData { is_dynamic: false }),
-            mesh: object::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]),
+            mesh: utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]),
             isometry: Isometry3::identity(),
         },
     );

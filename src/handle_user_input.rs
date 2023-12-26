@@ -19,6 +19,7 @@ pub struct UserInputState {
     pub left: bool,
     pub down: bool,
     pub right: bool,
+    pub space: bool,
 }
 
 impl UserInputState {
@@ -37,6 +38,7 @@ impl UserInputState {
             left: false,
             right: false,
             down: false,
+            space: false,
         }
     }
     pub fn handle_input(&mut self, input: &winit::event::WindowEvent) {
@@ -67,6 +69,7 @@ impl UserInputState {
                 VirtualKeyCode::Left => self.left = state == &ElementState::Pressed,
                 VirtualKeyCode::Down => self.down = state == &ElementState::Pressed,
                 VirtualKeyCode::Right => self.right = state == &ElementState::Pressed,
+                VirtualKeyCode::Space => self.space = state == &ElementState::Pressed,
                 _ => (),
             },
             _ => (),

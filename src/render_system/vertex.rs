@@ -23,4 +23,9 @@ impl Vertex3D {
             _dummy1: 0.0,
         }
     }
+
+    pub fn new2(position: [f32; 3], t: u32, uv: [f32; 2]) -> Vertex3D {
+        let tuv = [t as f32, uv[0], uv[1]];
+        Vertex3D::new(position, tuv)
+    }
 }
