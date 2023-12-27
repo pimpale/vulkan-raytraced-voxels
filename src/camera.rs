@@ -167,7 +167,6 @@ impl InteractiveCamera for SphericalCamera {
                         if self.offset < 0.5 {
                             self.offset = 0.5;
                         }
-                        println!("offset: {}", self.offset);
                     }
                     winit::event::MouseScrollDelta::PixelDelta(_) => {}
                 }

@@ -52,7 +52,7 @@ use super::{
 pub fn get_device_for_rendering_on(
     instance: Arc<Instance>,
     surface: Arc<Surface>,
-) -> (Arc<Device>, Arc<Queue>) {
+) -> (Arc<Device>, Arc<Queue>, Arc<Queue>) {
     let device_extensions = DeviceExtensions {
         khr_acceleration_structure: true,
         khr_ray_query: true,
@@ -66,21 +66,37 @@ pub fn get_device_for_rendering_on(
         ray_query: true,
         ..Features::empty()
     };
-    let (physical_device, queue_family_index) = instance
+    let (physical_device, general_queue_family_index, transfer_queue_family_index) = instance
         .enumerate_physical_devices()
         .unwrap()
         .filter(|p| p.supported_extensions().contains(&device_extensions))
         .filter_map(|p| {
-            p.queue_family_properties()
+            // find a general purpose queue
+            let general_queue_family_index = p
+                .queue_family_properties()
                 .iter()
                 .enumerate()
                 .position(|(i, q)| {
                     q.queue_flags.intersects(QueueFlags::GRAPHICS)
                         && p.surface_support(i as u32, &surface).unwrap_or(false)
-                })
-                .map(|i| (p, i as u32))
+                });
+
+            // find a transfer-only queue (this will be fast for transfers)
+            let transfer_queue_family_index = p
+                .queue_family_properties()
+                .iter()
+                .enumerate()
+                .position(|(i, q)| {
+                    // has transfer and sparse binding only
+                    q.queue_flags == QueueFlags::TRANSFER | QueueFlags::SPARSE_BINDING
+                });
+
+            match (general_queue_family_index, transfer_queue_family_index) {
+                (Some(q), Some(t)) => Some((p, q as u32, t as u32)),
+                _ => None,
+            }
         })
-        .min_by_key(|(p, _)| match p.properties().device_type {
+        .min_by_key(|(p, _, _)| match p.properties().device_type {
             PhysicalDeviceType::DiscreteGpu => 0,
             PhysicalDeviceType::IntegratedGpu => 1,
             PhysicalDeviceType::VirtualGpu => 2,
@@ -95,18 +111,25 @@ pub fn get_device_for_rendering_on(
         DeviceCreateInfo {
             enabled_extensions: device_extensions,
             enabled_features: features,
-            queue_create_infos: vec![QueueCreateInfo {
-                queue_family_index,
-                ..Default::default()
-            }],
+            queue_create_infos: vec![
+                QueueCreateInfo {
+                    queue_family_index: general_queue_family_index,
+                    ..Default::default()
+                },
+                QueueCreateInfo {
+                    queue_family_index: transfer_queue_family_index,
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         },
     )
     .unwrap();
 
-    let queue = queues.next().unwrap();
+    let general_queue = queues.next().unwrap();
+    let transfer_queue = queues.next().unwrap();
 
-    (device, queue)
+    (device, general_queue, transfer_queue)
 }
 
 #[derive(Clone, BufferContents, Vertex)]
@@ -395,7 +418,6 @@ impl Renderer {
             [],
         )
         .unwrap();
-
 
         builder
             .begin_rendering(RenderingInfo {

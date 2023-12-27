@@ -25,7 +25,8 @@ mod render_system;
 mod utils;
 
 fn build_scene(
-    queue: Arc<vulkano::device::Queue>,
+    general_queue: Arc<vulkano::device::Queue>,
+    transfer_queue: Arc<vulkano::device::Queue>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
@@ -68,7 +69,8 @@ fn build_scene(
     let g = vec![[0.0, -0.1, -50.0].into(), [0.0, -0.1, 50.0].into()];
 
     let mut world = GameWorld::new(
-        queue,
+        general_queue,
+        transfer_queue,
         command_buffer_allocator,
         memory_allocator,
         descriptor_set_allocator,
@@ -143,7 +145,7 @@ fn main() {
 
     let surface = Surface::from_window(instance.clone(), window).unwrap();
 
-    let (device, queue) = render_system::interactive_rendering::get_device_for_rendering_on(
+    let (device, general_queue, transfer_queue) = render_system::interactive_rendering::get_device_for_rendering_on(
         instance.clone(),
         surface.clone(),
     );
@@ -169,7 +171,8 @@ fn main() {
     let mut frame_count = 0;
 
     let mut world = build_scene(
-        queue.clone(),
+        general_queue.clone(),
+        transfer_queue.clone(),
         command_buffer_allocator.clone(),
         memory_allocator.clone(),
         descriptor_set_allocator.clone(),

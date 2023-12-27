@@ -6,6 +6,7 @@ use std::sync::Arc;
 use nalgebra::Isometry3;
 use nalgebra::Vector3;
 
+use threadpool::ThreadPool;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::device::DeviceOwned;
@@ -14,7 +15,9 @@ use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::swapchain::Surface;
 
 use crate::camera::InteractiveCamera;
+use crate::game_system::block::BlockDefinitionTable;
 use crate::game_system::camera_manager::CameraManager;
+use crate::game_system::chunk_manager::ChunkManager;
 use crate::game_system::ego_movement_manager::EgoMovementManager;
 use crate::game_system::manager::Manager;
 use crate::game_system::manager::UpdateData;
@@ -73,7 +76,8 @@ pub struct GameWorld {
 
 impl GameWorld {
     pub fn new(
-        queue: Arc<Queue>,
+        general_queue: Arc<Queue>,
+        transfer_queue: Arc<Queue>,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
@@ -81,23 +85,26 @@ impl GameWorld {
         surface: Arc<Surface>,
         camera: Box<dyn InteractiveCamera>,
     ) -> GameWorld {
-        let device = queue.device();
+        let device = general_queue.device();
 
         assert!(device == memory_allocator.device());
 
         let renderer = interactive_rendering::Renderer::new(
             surface.clone(),
-            queue.clone(),
+            general_queue.clone(),
             command_buffer_allocator.clone(),
             memory_allocator.clone(),
             descriptor_set_allocator.clone(),
         );
 
         let scene = Rc::new(RefCell::new(Scene::new(
-            queue.clone(),
+            general_queue.clone(),
+            transfer_queue.clone(),
             memory_allocator.clone(),
             command_buffer_allocator.clone(),
         )));
+
+        let threadpool = Arc::new(ThreadPool::new(16));
 
         let scene_manager = SceneManager::new(scene.clone());
 
@@ -108,6 +115,10 @@ impl GameWorld {
         let ego_movement_manager = EgoMovementManager::new();
 
         let physics_manager = PhysicsManager::new();
+
+        let block_table = Arc::new(BlockDefinitionTable::load_assets("assets/blocks", vec![]));
+
+        let chunk_manager = ChunkManager::new(threadpool, 0, block_table);
 
         GameWorld {
             entities: HashMap::new(),
@@ -122,16 +133,26 @@ impl GameWorld {
                 Box::new(camera_manager),
                 Box::new(ego_movement_manager),
                 Box::new(physics_manager),
+                Box::new(chunk_manager),
             ],
         }
     }
 
     pub fn step(&mut self) {
+        let reserved_ids = vec![];
+        let mut reserve_fn = || loop {
+            let id = rand::random::<u32>();
+            if !self.entities.contains_key(&id) && !reserved_ids.contains(&id) {
+                return id;
+            }
+        };
+
         let mut new_changes = vec![];
         for manager in self.managers.iter_mut() {
             let data = UpdateData {
                 entities: &self.entities,
                 ego_entity_id: self.ego_entity_id,
+                reserve_entity_id: &mut reserve_fn,
             };
             // run each manager, and store the changes required
             new_changes.extend(manager.update(data, &self.changes_since_last_step));
