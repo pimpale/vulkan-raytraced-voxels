@@ -89,12 +89,17 @@ impl GameWorld {
 
         assert!(device == memory_allocator.device());
 
+        let mut texture_atlas = vec![];
+
+        let block_table = Arc::new(BlockDefinitionTable::load_assets("assets/blocks", &mut texture_atlas));
+
         let renderer = interactive_rendering::Renderer::new(
             surface.clone(),
             general_queue.clone(),
             command_buffer_allocator.clone(),
             memory_allocator.clone(),
             descriptor_set_allocator.clone(),
+            texture_atlas,
         );
 
         let scene = Rc::new(RefCell::new(Scene::new(
@@ -104,7 +109,7 @@ impl GameWorld {
             command_buffer_allocator.clone(),
         )));
 
-        let threadpool = Arc::new(ThreadPool::new(16));
+        let threadpool = Arc::new(ThreadPool::new(15));
 
         let scene_manager = SceneManager::new(scene.clone());
 
@@ -116,7 +121,6 @@ impl GameWorld {
 
         let physics_manager = PhysicsManager::new();
 
-        let block_table = Arc::new(BlockDefinitionTable::load_assets("assets/blocks", vec![]));
 
         let chunk_manager = ChunkManager::new(threadpool, 0, block_table);
 

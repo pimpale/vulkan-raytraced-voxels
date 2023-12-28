@@ -1,34 +1,40 @@
 use core::panic;
 use std::sync::Arc;
 
-use nalgebra::{Matrix4, Point3, Vector3};
+use image::RgbaImage;
+use nalgebra::{Point3, Vector3};
 use vulkano::{
     acceleration_structure::AccelerationStructure,
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        RenderPassBeginInfo, RenderingAttachmentInfo, RenderingInfo,
+        CopyBufferToImageInfo, PrimaryCommandBufferAbstract, RenderingAttachmentInfo,
+        RenderingInfo,
     },
     descriptor_set::{
-        allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
+        allocator::StandardDescriptorSetAllocator, layout::DescriptorBindingFlags,
+        PersistentDescriptorSet, WriteDescriptorSet,
     },
     device::{
         physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned,
         Features, Queue, QueueCreateInfo, QueueFlags,
     },
     format::Format,
-    image::{view::ImageView, Image, ImageCreateInfo, ImageType, ImageUsage},
+    image::{
+        sampler::{Sampler, SamplerAddressMode, SamplerCreateInfo},
+        view::ImageView,
+        Image, ImageCreateInfo, ImageType, ImageUsage,
+    },
     instance::Instance,
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
         graphics::{
             color_blend::{ColorBlendAttachmentState, ColorBlendState},
-            depth_stencil::{DepthState, DepthStencilState},
             input_assembly::InputAssemblyState,
             multisample::MultisampleState,
             rasterization::RasterizationState,
             subpass::PipelineRenderingCreateInfo,
-            vertex_input::{Vertex, VertexBufferDescription, VertexDefinition},
+            vertex_input::{Vertex, VertexDefinition},
             viewport::{Viewport, ViewportState},
             GraphicsPipelineCreateInfo,
         },
@@ -36,8 +42,7 @@ use vulkano::{
         DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
         PipelineShaderStageCreateInfo,
     },
-    render_pass::{AttachmentStoreOp, Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
-    shader::{spirv::ExecutionModel, EntryPoint},
+    render_pass::AttachmentStoreOp,
     swapchain::{self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
     sync::{self, GpuFuture},
     Validated, VulkanError,
@@ -65,6 +70,8 @@ pub fn get_device_for_rendering_on(
         dynamic_rendering: true,
         ray_query: true,
         shader_int64: true,
+        runtime_descriptor_array: true,
+        descriptor_binding_variable_descriptor_count: true,
         ..Features::empty()
     };
     let (physical_device, general_queue_family_index, transfer_queue_family_index) = instance
@@ -236,10 +243,78 @@ pub struct Renderer {
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     swapchain: Arc<Swapchain>,
+    material_descriptor_set: Arc<PersistentDescriptorSet>,
     attachment_image_views: Vec<Arc<ImageView>>,
     pipeline: Arc<GraphicsPipeline>,
     wdd_needs_rebuild: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
+}
+
+fn load_textures(
+    textures: Vec<RgbaImage>,
+    queue: Arc<Queue>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    memory_allocator: Arc<StandardMemoryAllocator>,
+) -> Vec<Arc<ImageView>> {
+    let mut builder = AutoCommandBufferBuilder::primary(
+        &command_buffer_allocator,
+        queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    let mut image_views = vec![];
+
+    for texture in textures {
+        let extent = [texture.width(), texture.height(), 1];
+
+        let upload_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            texture.into_raw(),
+        )
+        .unwrap();
+
+        let image = Image::new(
+            memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: Format::R8G8B8A8_SRGB,
+                extent,
+                usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            AllocationCreateInfo::default(),
+        )
+        .unwrap();
+
+        builder
+            .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
+                upload_buffer,
+                image.clone(),
+            ))
+            .unwrap();
+
+        image_views.push(ImageView::new_default(image).unwrap());
+    }
+
+    let future = builder.build().unwrap().execute(queue.clone()).unwrap();
+
+    future
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    image_views
 }
 
 impl Renderer {
@@ -249,6 +324,7 @@ impl Renderer {
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+        texture_atlas: Vec<RgbaImage>,
     ) -> Renderer {
         let device = memory_allocator.device().clone();
 
@@ -272,18 +348,33 @@ impl Renderer {
                 PipelineShaderStageCreateInfo::new(vs),
                 PipelineShaderStageCreateInfo::new(fs),
             ];
-            let layout = PipelineLayout::new(
-                device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
-                    .into_pipeline_layout_create_info(device.clone())
-                    .unwrap(),
-            )
-            .unwrap();
+
+            let layout = {
+                let mut layout_create_info =
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+                // Adjust the info for set 0, binding 1 to make it variable with texture_atlas.len() descriptors.
+                let binding = layout_create_info.set_layouts[0]
+                    .bindings
+                    .get_mut(&1)
+                    .unwrap();
+                binding.binding_flags |= DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
+                binding.descriptor_count = texture_atlas.len() as u32;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    layout_create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap(),
+                )
+                .unwrap()
+            };
 
             let subpass = PipelineRenderingCreateInfo {
                 color_attachment_formats: vec![Some(swapchain.image_format())],
                 ..Default::default()
             };
+
             GraphicsPipeline::new(
                 device.clone(),
                 None,
@@ -323,6 +414,27 @@ impl Renderer {
         )
         .unwrap();
 
+        let texture_atlas = load_textures(
+            texture_atlas,
+            queue.clone(),
+            command_buffer_allocator.clone(),
+            memory_allocator.clone(),
+        );
+
+        let sampler = Sampler::new(device.clone(), Default::default()).unwrap();
+
+        let material_descriptor_set = PersistentDescriptorSet::new_variable(
+            &descriptor_set_allocator,
+            pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            texture_atlas.len() as u32,
+            [
+                WriteDescriptorSet::sampler(0, sampler),
+                WriteDescriptorSet::image_view_array(1, 0, texture_atlas),
+            ],
+            [],
+        )
+        .unwrap();
+
         Renderer {
             surface,
             command_buffer_allocator,
@@ -337,6 +449,7 @@ impl Renderer {
             memory_allocator,
             wdd_needs_rebuild: false,
             quad_buffer,
+            material_descriptor_set,
         }
     }
 
@@ -407,9 +520,9 @@ impl Renderer {
         )
         .unwrap();
 
-        let descriptor_set = PersistentDescriptorSet::new(
+        let per_frame_descriptor_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
-            self.pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            self.pipeline.layout().set_layouts().get(1).unwrap().clone(),
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_vertex_buffer_addresses),
@@ -439,7 +552,7 @@ impl Renderer {
                 PipelineBindPoint::Graphics,
                 self.pipeline.layout().clone(),
                 0,
-                descriptor_set,
+                (self.material_descriptor_set.clone(), per_frame_descriptor_set),
             )
             .unwrap()
             .push_constants(

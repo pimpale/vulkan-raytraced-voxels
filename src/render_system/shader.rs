@@ -24,23 +24,28 @@ pub mod fs {
             #extension GL_EXT_ray_query: require
             #extension GL_EXT_scalar_block_layout: require
             #extension GL_EXT_buffer_reference2: require
-            #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+            #extension GL_EXT_shader_explicit_arithmetic_types_int64: require
+            #extension GL_EXT_nonuniform_qualifier: require
 
             layout(location = 0) in vec2 in_uv;
             layout(location = 0) out vec4 f_color;
             
-            layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
+            layout(set = 0, binding = 0) uniform sampler s;
+            layout(set = 0, binding = 1) uniform texture2D tex[];
+
+            layout(set = 1, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
             
             struct Vertex {
                 vec3 position;
-                vec3 tuv;
+                uint t;
+                vec2 uv;
             };
 
             layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer InstanceData {
                 Vertex vertexes[];
             };
 
-            layout(set = 0, binding = 1) readonly buffer VertexBufferDeviceAddresseBuffer {
+            layout(set = 1, binding = 1) readonly buffer InstanceDataAddresses {
                 // one uint64 per instance that points to the device address of the data for that instance
                 uint64_t instance_data_addrs[];
             };
@@ -95,9 +100,10 @@ pub mod fs {
                     InstanceData id = InstanceData(instance_data_addrs[instance_index]);
 
                     // get the texture coordinates
-                    vec3 tuv = id.vertexes[prim_index*3 + 0].tuv * bary3.x + id.vertexes[prim_index*3 + 1].tuv * bary3.y + id.vertexes[prim_index*3 + 2].tuv * bary3.z;
+                    uint t = id.vertexes[prim_index*3 + 0].t;
+                    vec2 uv = id.vertexes[prim_index*3 + 0].uv * bary3.x + id.vertexes[prim_index*3 + 1].uv * bary3.y + id.vertexes[prim_index*3 + 2].uv * bary3.z;
                     
-                    f_color = vec4(tuv, 1.0);
+                    f_color = texture(nonuniformEXT(sampler2D(tex[t], s)), uv);
                 }
             }
         ",

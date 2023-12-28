@@ -5,9 +5,10 @@ use std::{
         mpsc::{Receiver, Sender},
         Arc,
     },
+    time::Instant,
 };
 
-use nalgebra::{Isometry3, Point3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use noise::{NoiseFn, OpenSimplex};
 use threadpool::ThreadPool;
 
@@ -18,31 +19,33 @@ use crate::{
 
 use super::{
     block::{BlockDefinitionTable, BlockIdx},
-    chunk::{self, WorldgenData, CHUNK_X_SIZE, CHUNK_Y_SIZE, CHUNK_Z_SIZE},
+    chunk::{self, NeighboringChunkData, WorldgenData, CHUNK_X_SIZE, CHUNK_Y_SIZE, CHUNK_Z_SIZE},
     manager::{Manager, UpdateData},
 };
 
 // if a chunk is within this boundary it will start to render
-const MIN_RENDER_RADIUS_X: i32 = 3;
-const MIN_RENDER_RADIUS_Y: i32 = 3;
-const MIN_RENDER_RADIUS_Z: i32 = 3;
+const MIN_RENDER_RADIUS_X: i32 = 5;
+const MIN_RENDER_RADIUS_Y: i32 = 5;
+const MIN_RENDER_RADIUS_Z: i32 = 5;
 
 // if a chunk is within this boundary it will stop rendering
-const MAX_RENDER_RADIUS_X: i32 = 6;
-const MAX_RENDER_RADIUS_Y: i32 = 6;
-const MAX_RENDER_RADIUS_Z: i32 = 6;
+const MAX_RENDER_RADIUS_X: i32 = 7;
+const MAX_RENDER_RADIUS_Y: i32 = 7;
+const MAX_RENDER_RADIUS_Z: i32 = 7;
 
 struct Chunk {
     data: Option<Arc<Vec<BlockIdx>>>,
     data_generating: bool,
-    mesh_stale: bool,
-    mesh_generating: bool,
+    // the instant at which the mesh became stale
+    mesh_stale: Option<Instant>,
+    // the instant at which the mesh started generating
+    mesh_generating: Option<Instant>,
     entity_id: Option<u32>,
 }
 
 enum ChunkWorkerEvent {
     ChunkGenerated(Point3<i32>, Vec<BlockIdx>),
-    ChunkMeshed(Point3<i32>, Vec<Vertex3D>),
+    ChunkMeshed(Point3<i32>, Instant, Vec<Vertex3D>),
 }
 
 pub struct ChunkManager {
@@ -92,13 +95,80 @@ impl ChunkManager {
                         .or_insert(Chunk {
                             data: None,
                             data_generating: false,
-                            mesh_stale: false,
-                            mesh_generating: false,
+                            mesh_stale: None,
+                            mesh_generating: None,
                             entity_id: None,
                         });
                 }
             }
         }
+    }
+
+    fn neighboring_chunks_have_data(&self, chunk_position: Point3<i32>) -> bool {
+        for position in &[
+            chunk_position + Vector3::new(-1, 0, 0),
+            chunk_position + Vector3::new(1, 0, 0),
+            chunk_position + Vector3::new(0, -1, 0),
+            chunk_position + Vector3::new(0, 1, 0),
+            chunk_position + Vector3::new(0, 0, -1),
+            chunk_position + Vector3::new(0, 0, 1),
+        ] {
+            if let Some(chunk) = self.chunks.get(position) {
+                if chunk.data.is_none() {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn get_neighboring_chunks(&self, chunk_position: Point3<i32>) -> [Arc<Vec<BlockIdx>>; 6] {
+        let left = self
+            .chunks
+            .get(&(chunk_position + Vector3::new(-1, 0, 0)))
+            .unwrap()
+            .data
+            .clone()
+            .unwrap();
+        let right = self
+            .chunks
+            .get(&(chunk_position + Vector3::new(1, 0, 0)))
+            .unwrap()
+            .data
+            .clone()
+            .unwrap();
+        let up = self
+            .chunks
+            .get(&(chunk_position + Vector3::new(0, -1, 0)))
+            .unwrap()
+            .data
+            .clone()
+            .unwrap();
+        let down = self
+            .chunks
+            .get(&(chunk_position + Vector3::new(0, 1, 0)))
+            .unwrap()
+            .data
+            .clone()
+            .unwrap();
+        let back = self
+            .chunks
+            .get(&(chunk_position + Vector3::new(0, 0, -1)))
+            .unwrap()
+            .data
+            .clone()
+            .unwrap();
+        let front = self
+            .chunks
+            .get(&(chunk_position + Vector3::new(0, 0, 1)))
+            .unwrap()
+            .data
+            .clone()
+            .unwrap();
+
+        [left, right, up, down, back, front]
     }
 
     fn chunk_should_be_loaded(&self, chunk_position: Point3<i32>) -> bool {
@@ -110,27 +180,41 @@ impl ChunkManager {
 
     fn update_chunks(&mut self, reserve_entity_id: &mut dyn FnMut() -> u32) -> Vec<WorldChange> {
         // get sorted chunk positions by distance from center
-        let mut chunk_positions: Vec<Point3<i32>> = self.chunks.keys().cloned().collect();
+        let chunk_positions: Vec<Point3<i32>> = self.chunks.keys().cloned().collect();
 
-        chunk_positions
-            .sort_by_key(|x| (x - self.center_chunk).cast::<f32>().norm_squared() as i32);
-
+        // chunk_positions
+        //     .sort_by_key(|x| (x - self.center_chunk).cast::<f32>().norm_squared() as i32);
 
         let mut world_changes: Vec<WorldChange> = vec![];
-
 
         for chunk_position in chunk_positions {
             if !self.chunk_should_be_loaded(chunk_position) {
                 let chunk = self.chunks.remove(&chunk_position).unwrap();
                 if let Some(entity_id) = chunk.entity_id {
                     world_changes.push(WorldChange::RemoveEntity(entity_id));
-                }                
+                }
                 continue;
             }
 
-            let chunk = self.chunks.get_mut(&chunk_position).unwrap();
+            let chunk = self.chunks.get(&chunk_position).unwrap();
+
+            let should_generate_data = match (&chunk.data, chunk.data_generating) {
+                (None, false) => true,
+                _ => false,
+            };
+
+            let should_mesh = chunk.data.is_some()
+                && match (chunk.mesh_stale, chunk.mesh_generating) {
+                    (Some(_), None) => true,
+                    (Some(mesh_became_stale), Some(mesh_started_generating)) => {
+                        mesh_became_stale > mesh_started_generating
+                    }
+                    _ => false,
+                }
+                && self.neighboring_chunks_have_data(chunk_position);
+
             // begin asynchronously generating all chunks that need to be generated
-            if chunk.data.is_none() && !chunk.data_generating {
+            if should_generate_data {
                 let worldgen_data = self.worldgen_data.clone();
                 let event_sender = self.event_sender.clone();
                 self.threadpool.execute(move || {
@@ -138,19 +222,42 @@ impl ChunkManager {
                     let _ = event_sender
                         .send(ChunkWorkerEvent::ChunkGenerated(chunk_position, chunk_data));
                 });
+                let chunk = self.chunks.get_mut(&chunk_position).unwrap();
                 chunk.data_generating = true;
             }
 
-            // begin asynchronously meshing all chunks that need to be meshed
-            if chunk.data.is_some() && chunk.mesh_stale && !chunk.mesh_generating {
-                let data = chunk.data.clone().unwrap();
+            if should_mesh {
                 let block_table = self.worldgen_data.block_definition_table.clone();
                 let event_sender = self.event_sender.clone();
+                let chunk = self.chunks.get(&chunk_position).unwrap();
+                let data = chunk.data.clone().unwrap();
+                let mesh_stale_time = chunk.mesh_stale.unwrap();
+
+                let [left, right, up, down, back, front] =
+                    self.get_neighboring_chunks(chunk_position);
+
                 self.threadpool.execute(move || {
-                    let mesh = chunk::gen_mesh(&block_table, &data);
-                    let _ = event_sender.send(ChunkWorkerEvent::ChunkMeshed(chunk_position, mesh));
+                    let mesh = chunk::gen_mesh(
+                        &block_table,
+                        &data,
+                        NeighboringChunkData {
+                            left: &left,
+                            right: &right,
+                            up: &up,
+                            down: &down,
+                            back: &back,
+                            front: &front,
+                        },
+                    );
+
+                    let _ = event_sender.send(ChunkWorkerEvent::ChunkMeshed(
+                        chunk_position,
+                        mesh_stale_time,
+                        mesh,
+                    ));
                 });
-                chunk.mesh_generating = true;
+                let chunk = self.chunks.get_mut(&chunk_position).unwrap();
+                chunk.mesh_generating = Some(Instant::now());
             }
         }
 
@@ -161,15 +268,41 @@ impl ChunkManager {
                     if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
                         chunk.data = Some(Arc::new(chunk_data));
                         chunk.data_generating = false;
-                        chunk.mesh_stale = true;
+                        chunk.mesh_stale = Some(Instant::now());
+
+                        // mark all neighboring chunks as stale mesh
+                        for position in &[
+                            chunk_position + Vector3::new(-1, 0, 0),
+                            chunk_position + Vector3::new(1, 0, 0),
+                            chunk_position + Vector3::new(0, -1, 0),
+                            chunk_position + Vector3::new(0, 1, 0),
+                            chunk_position + Vector3::new(0, 0, -1),
+                            chunk_position + Vector3::new(0, 0, 1),
+                        ] {
+                            if let Some(chunk) = self.chunks.get_mut(position) {
+                                chunk.mesh_stale = Some(Instant::now());
+                            }
+                        }
                     }
                 }
-                ChunkWorkerEvent::ChunkMeshed(chunk_position, mesh) => {
+                ChunkWorkerEvent::ChunkMeshed(chunk_position, became_stale_at, mesh) => {
                     if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
-                        chunk.mesh_stale = false;
-                        chunk.mesh_generating = false;
+                        if chunk.mesh_stale.unwrap() > became_stale_at {
+                            // this mesh is stale, ignore it
+                            continue;
+                        }
+                        chunk.mesh_stale = None;
+                        chunk.mesh_generating = None;
 
-                        let entity_id = reserve_entity_id();
+                        // get the new entity id
+                        // if the chunk already has an entity id, remove it
+                        let entity_id = if let Some(entity_id) = chunk.entity_id {
+                            world_changes.push(WorldChange::RemoveEntity(entity_id));
+                            entity_id
+                        } else {
+                            reserve_entity_id()
+                        };
+
                         chunk.entity_id = Some(entity_id);
 
                         world_changes.push(WorldChange::AddEntity(
@@ -219,6 +352,8 @@ impl Manager for ChunkManager {
         }
 
         // update chunks
-        self.update_chunks(reserve_entity_id)
+        let out = self.update_chunks(reserve_entity_id);
+
+        out
     }
 }

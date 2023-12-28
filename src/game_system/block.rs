@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use image::Rgba32FImage;
+use image::RgbaImage;
 
 #[derive(Copy, Clone)]
 pub enum BlockFace {
@@ -41,7 +41,7 @@ impl BlockDefinitionTable {
     // appends block textures to current_texture_atlas
     pub fn load_assets(
         assets_path: &str,
-        mut current_texture_atlas: Vec<Rgba32FImage>,
+        current_texture_atlas: &mut Vec<RgbaImage>,
     ) -> BlockDefinitionTable {
         let block_textures_offset = current_texture_atlas.len();
 
@@ -70,7 +70,7 @@ impl BlockDefinitionTable {
                 BlockFace::FRONT,
             ] {
                 let texture_path = format!("{}/{}/{}.ff", assets_path, block.name, face);
-                let texture = image::open(texture_path).unwrap().to_rgba32f();
+                let texture = image::open(texture_path).unwrap().to_rgba8();
                 current_texture_atlas.push(texture);
             }
         }
