@@ -218,9 +218,6 @@ where
         }
 
         if self.tlas_state != TopLevelAccelerationStructureState::UpToDate {
-            let t0 = std::time::Instant::now();
-
-            println!("rebuilding tlas");
             // await all the blas futures on the cpu
             for object in self.objects.values().flatten() {
                 object.blas_build_future.wait(None).unwrap();
@@ -304,7 +301,7 @@ fn create_top_level_acceleration_structure(
     queue: Arc<Queue>,
     bottom_level_acceleration_structures: &[&AccelerationStructure],
 ) -> (Arc<AccelerationStructure>, Box<dyn GpuFuture>) {
-    let mut instances = bottom_level_acceleration_structures
+    let instances = bottom_level_acceleration_structures
         .iter()
         .map(
             |&bottom_level_acceleration_structure| AccelerationStructureInstance {

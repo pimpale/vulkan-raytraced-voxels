@@ -6,9 +6,9 @@ use noise::{OpenSimplex, NoiseFn};
 use super::block::{BlockDefinitionTable, BlockFace, BlockIdx};
 use crate::render_system::vertex::Vertex3D;
 
-pub const CHUNK_X_SIZE: usize = 32;
-pub const CHUNK_Y_SIZE: usize = 32;
-pub const CHUNK_Z_SIZE: usize = 32;
+pub const CHUNK_X_SIZE: usize = 16;
+pub const CHUNK_Y_SIZE: usize = 16;
+pub const CHUNK_Z_SIZE: usize = 16;
 
 pub fn chunk_idx(x: usize, y: usize, z:usize) -> usize {
    CHUNK_Z_SIZE * CHUNK_Y_SIZE * x + CHUNK_Z_SIZE * y + z

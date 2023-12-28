@@ -22,10 +22,15 @@ use super::{
     manager::{Manager, UpdateData},
 };
 
-// how many chunks to render
-const RENDER_RADIUS_X: i32 = 3;
-const RENDER_RADIUS_Y: i32 = 3;
-const RENDER_RADIUS_Z: i32 = 3;
+// if a chunk is within this boundary it will start to render
+const MIN_RENDER_RADIUS_X: i32 = 3;
+const MIN_RENDER_RADIUS_Y: i32 = 3;
+const MIN_RENDER_RADIUS_Z: i32 = 3;
+
+// if a chunk is within this boundary it will stop rendering
+const MAX_RENDER_RADIUS_X: i32 = 6;
+const MAX_RENDER_RADIUS_Y: i32 = 6;
+const MAX_RENDER_RADIUS_Z: i32 = 6;
 
 struct Chunk {
     data: Option<Arc<Vec<BlockIdx>>>,
@@ -75,9 +80,9 @@ impl ChunkManager {
     // this will cause chunks to be generated and unloaded as needed.
     fn set_center_chunk(&mut self, chunk_position: Point3<i32>) {
         self.center_chunk = chunk_position;
-        for x in -RENDER_RADIUS_X..=RENDER_RADIUS_X {
-            for y in -RENDER_RADIUS_Y..=RENDER_RADIUS_Y {
-                for z in -RENDER_RADIUS_Z..=RENDER_RADIUS_Z {
+        for x in -MIN_RENDER_RADIUS_X..=MIN_RENDER_RADIUS_X {
+            for y in -MIN_RENDER_RADIUS_Y..=MIN_RENDER_RADIUS_Y {
+                for z in -MIN_RENDER_RADIUS_Z..=MIN_RENDER_RADIUS_Z {
                     self.chunks
                         .entry(Point3::new(
                             chunk_position[0] + x,
@@ -98,13 +103,32 @@ impl ChunkManager {
 
     fn chunk_should_be_loaded(&self, chunk_position: Point3<i32>) -> bool {
         let distance = chunk_position - self.center_chunk;
-        distance[0].abs() <= RENDER_RADIUS_X
-            && distance[1].abs() <= RENDER_RADIUS_Y
-            && distance[2].abs() <= RENDER_RADIUS_Z
+        distance[0].abs() <= MAX_RENDER_RADIUS_X
+            && distance[1].abs() <= MAX_RENDER_RADIUS_Y
+            && distance[2].abs() <= MAX_RENDER_RADIUS_Z
     }
 
     fn update_chunks(&mut self, reserve_entity_id: &mut dyn FnMut() -> u32) -> Vec<WorldChange> {
-        for (&chunk_position, chunk) in self.chunks.iter_mut() {
+        // get sorted chunk positions by distance from center
+        let mut chunk_positions: Vec<Point3<i32>> = self.chunks.keys().cloned().collect();
+
+        chunk_positions
+            .sort_by_key(|x| (x - self.center_chunk).cast::<f32>().norm_squared() as i32);
+
+
+        let mut world_changes: Vec<WorldChange> = vec![];
+
+
+        for chunk_position in chunk_positions {
+            if !self.chunk_should_be_loaded(chunk_position) {
+                let chunk = self.chunks.remove(&chunk_position).unwrap();
+                if let Some(entity_id) = chunk.entity_id {
+                    world_changes.push(WorldChange::RemoveEntity(entity_id));
+                }                
+                continue;
+            }
+
+            let chunk = self.chunks.get_mut(&chunk_position).unwrap();
             // begin asynchronously generating all chunks that need to be generated
             if chunk.data.is_none() && !chunk.data_generating {
                 let worldgen_data = self.worldgen_data.clone();
@@ -130,37 +154,37 @@ impl ChunkManager {
             }
         }
 
-        let mut world_changes: Vec<WorldChange> = vec![];
-
         // recieve updates from worker threads
         for event in self.event_reciever.try_iter() {
             match event {
                 ChunkWorkerEvent::ChunkGenerated(chunk_position, chunk_data) => {
-                    let chunk = self.chunks.get_mut(&chunk_position).unwrap();
-                    chunk.data = Some(Arc::new(chunk_data));
-                    chunk.data_generating = false;
-                    chunk.mesh_stale = true;
+                    if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
+                        chunk.data = Some(Arc::new(chunk_data));
+                        chunk.data_generating = false;
+                        chunk.mesh_stale = true;
+                    }
                 }
                 ChunkWorkerEvent::ChunkMeshed(chunk_position, mesh) => {
-                    let chunk = self.chunks.get_mut(&chunk_position).unwrap();
-                    chunk.mesh_stale = false;
-                    chunk.mesh_generating = false;
+                    if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
+                        chunk.mesh_stale = false;
+                        chunk.mesh_generating = false;
 
-                    let entity_id = reserve_entity_id();
-                    chunk.entity_id = Some(entity_id);
+                        let entity_id = reserve_entity_id();
+                        chunk.entity_id = Some(entity_id);
 
-                    world_changes.push(WorldChange::AddEntity(
-                        entity_id,
-                        EntityCreationData {
-                            mesh,
-                            isometry: Isometry3::translation(
-                                chunk_position[0] as f32 * CHUNK_X_SIZE as f32,
-                                chunk_position[1] as f32 * CHUNK_Y_SIZE as f32,
-                                chunk_position[2] as f32 * CHUNK_Z_SIZE as f32,
-                            ),
-                            physics: None,
-                        },
-                    ));
+                        world_changes.push(WorldChange::AddEntity(
+                            entity_id,
+                            EntityCreationData {
+                                mesh,
+                                isometry: Isometry3::translation(
+                                    chunk_position[0] as f32 * CHUNK_X_SIZE as f32,
+                                    chunk_position[1] as f32 * CHUNK_Y_SIZE as f32,
+                                    chunk_position[2] as f32 * CHUNK_Z_SIZE as f32,
+                                ),
+                                physics: None,
+                            },
+                        ));
+                    }
                 }
             }
         }
