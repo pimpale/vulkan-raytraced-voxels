@@ -40,7 +40,7 @@ enum TopLevelAccelerationStructureState {
 
 /// Corresponds to a TLAS
 pub struct Scene<K, Vertex> {
-    queue: Arc<Queue>,
+    general_queue: Arc<Queue>,
     transfer_queue: Arc<Queue>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
@@ -58,7 +58,7 @@ where
     K: Ord + Clone + std::cmp::Eq + std::hash::Hash,
 {
     pub fn new(
-        queue: Arc<Queue>,
+        general_queue: Arc<Queue>,
         transfer_queue: Arc<Queue>,
         memory_allocator: Arc<dyn MemoryAllocator>,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
@@ -70,7 +70,7 @@ where
             None,
             memory_allocator.clone(),
             &command_buffer_allocator,
-            queue.clone(),
+            general_queue.clone(),
             &[],
         );
 
@@ -97,7 +97,7 @@ where
             .unwrap();
 
         Scene {
-            queue,
+            general_queue,
             transfer_queue,
             command_buffer_allocator,
             memory_allocator,
@@ -121,7 +121,7 @@ where
             None,
             self.memory_allocator.clone(),
             &self.command_buffer_allocator,
-            self.queue.clone(),
+            self.general_queue.clone(),
             &[&vertex_buffer],
             isometry,
         );
@@ -148,7 +148,7 @@ where
                     Some(object.blas.clone()),
                     self.memory_allocator.clone(),
                     &self.command_buffer_allocator,
-                    self.queue.clone(),
+                    self.general_queue.clone(),
                     &[&object.vertex_buffer],
                     isometry,
                 );
@@ -190,7 +190,7 @@ where
                     Some(self.tlas.clone()),
                     self.memory_allocator.clone(),
                     &self.command_buffer_allocator,
-                    self.queue.clone(),
+                    self.general_queue.clone(),
                     &self
                         .objects
                         .values()
@@ -226,7 +226,7 @@ where
                     None,
                     self.memory_allocator.clone(),
                     &self.command_buffer_allocator,
-                    self.queue.clone(),
+                    self.general_queue.clone(),
                     &self
                         .objects
                         .values()
@@ -376,6 +376,8 @@ where
     )
     .unwrap();
 
+    dbg!(tlas_vertex_buffer.len());
+
     // find the geometry offsets
     let mut geometry_offsets = Vec::new();
     let mut cur_geometry_offset = 0;
@@ -426,7 +428,7 @@ fn create_top_level_acceleration_structure(
             |&bottom_level_acceleration_structure| AccelerationStructureInstance {
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
                     0,
-                    GeometryInstanceFlags::TRIANGLE_FACING_CULL_DISABLE.into(),
+                    0,
                 ),
                 acceleration_structure_reference: bottom_level_acceleration_structure
                     .device_address()

@@ -21,10 +21,9 @@ pub mod fs {
         ty: "fragment",
         src: r"
             #version 460
-            #extension GL_EXT_ray_query: enable
-
-            precision highp float;
-
+            #extension GL_EXT_ray_query: require
+            #extension GL_EXT_scalar_block_layout: require
+            #extension GL_EXT_buffer_reference2: require
 
             struct Vertex {
                 vec3 position;
@@ -40,9 +39,8 @@ pub mod fs {
                 uint geometry_offset_buffer[];
             };
 
-            layout(set = 0, binding = 2, std430) readonly buffer VertexBufferSSBO {
+            layout(set = 0, binding = 2, scalar) readonly buffer VertexBufferSSBO {
                 Vertex vertex_buffer[];
-                //float vertex_buffer[];
             };
 
             layout(push_constant) uniform Camera {
