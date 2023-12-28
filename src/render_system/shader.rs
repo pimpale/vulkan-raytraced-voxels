@@ -24,23 +24,25 @@ pub mod fs {
             #extension GL_EXT_ray_query: require
             #extension GL_EXT_scalar_block_layout: require
             #extension GL_EXT_buffer_reference2: require
-
-            struct Vertex {
-                vec3 position;
-                vec3 tuv;
-            };
+            #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
             layout(location = 0) in vec2 in_uv;
             layout(location = 0) out vec4 f_color;
             
             layout(set = 0, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
             
-            layout(set = 0, binding = 1) readonly buffer GeometryOffsetSSBO {
-                uint geometry_offset_buffer[];
+            struct Vertex {
+                vec3 position;
+                vec3 tuv;
             };
 
-            layout(set = 0, binding = 2, scalar) readonly buffer VertexBufferSSBO {
-                Vertex vertex_buffer[];
+            layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer InstanceData {
+                Vertex vertexes[];
+            };
+
+            layout(set = 0, binding = 1) readonly buffer VertexBufferDeviceAddresseBuffer {
+                // one uint64 per instance that points to the device address of the data for that instance
+                uint64_t instance_data_addrs[];
             };
 
             layout(push_constant) uniform Camera {
@@ -83,15 +85,17 @@ pub mod fs {
                     f_color = vec4(0.0, 0.0, 0.0, 1.0);
                 } else {
                     // hit
-                    uint primitive_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
+                    uint prim_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
                     uint instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
 
                     vec2 bary = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
                     vec3 bary3 = vec3(1.0 - bary.x - bary.y,  bary.x, bary.y);
 
-                    uint base_offset = geometry_offset_buffer[instance_index] + 3*primitive_index;
+                    // get the instance data for this instance
+                    InstanceData id = InstanceData(instance_data_addrs[instance_index]);
 
-                    vec3 tuv = vertex_buffer[base_offset + 0].tuv * bary3.x + vertex_buffer[base_offset + 1].tuv * bary3.y + vertex_buffer[base_offset + 2].tuv * bary3.z;
+                    // get the texture coordinates
+                    vec3 tuv = id.vertexes[prim_index*3 + 0].tuv * bary3.x + id.vertexes[prim_index*3 + 1].tuv * bary3.y + id.vertexes[prim_index*3 + 2].tuv * bary3.z;
                     
                     f_color = vec4(tuv, 1.0);
                 }

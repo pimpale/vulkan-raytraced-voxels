@@ -211,14 +211,12 @@ impl GameWorld {
         let (eye, front, right, up) = self.camera.borrow().eye_front_right_up();
         let (
             top_level_acceleration_structure,
-            top_level_geometry_offset_buffer,
-            top_level_vertex_buffer,
+            instance_vertex_buffer_addresses,
         ) = self.scene.borrow_mut().tlas();
         // render to screen
         self.renderer.render(
             top_level_acceleration_structure,
-            top_level_geometry_offset_buffer,
-            top_level_vertex_buffer,
+            instance_vertex_buffer_addresses,
             eye,
             front,
             right,

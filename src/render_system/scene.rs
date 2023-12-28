@@ -45,9 +45,8 @@ pub struct Scene<K, Vertex> {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: BTreeMap<K, Option<Object<Vertex>>>,
-    tl_geometry_offset_buffer: Subbuffer<[u32]>,
-    tl_vertex_buffer: Subbuffer<[Vertex]>,
     tlas: Arc<AccelerationStructure>,
+    instance_vertex_buffer_addresses: Subbuffer<[u64]>,
     tlas_state: TopLevelAccelerationStructureState,
 }
 
@@ -66,12 +65,34 @@ where
         // assert that the vertex type must have a field called position
         assert!(Vertex::per_vertex().members.contains_key("position"));
 
+        // in order to build the tlas, we need to have some data. We initialize it with a degenerate single triangle to permit this
+        let degenerate_triangle = vec![Vertex::default(); 3];
+
+        let blas_vertex_buffer =
+            blas_vertex_buffer(memory_allocator.clone(), [&degenerate_triangle]);
+
+        let (blas, blas_build_future) = create_bottom_level_acceleration_structure(
+            None,
+            memory_allocator.clone(),
+            &command_buffer_allocator,
+            general_queue.clone(),
+            &[&blas_vertex_buffer],
+            Isometry3::identity(),
+        );
+
+        // await build
+        blas_build_future
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
         let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
             None,
             memory_allocator.clone(),
             &command_buffer_allocator,
             general_queue.clone(),
-            &[],
+            &[&blas],
         );
 
         // await build
@@ -81,20 +102,21 @@ where
             .wait(None)
             .unwrap();
 
-        let (tl_vertex_buffer, tl_geometry_offset_buffer, tlas_vertex_buffer_future) =
-            tlas_vertex_buffer(
-                transfer_queue.clone(),
-                memory_allocator.clone(),
-                &command_buffer_allocator,
-                vec![],
-            );
-
-        // await vertex buffer
-        tlas_vertex_buffer_future
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
+        // create instance vertex buffer addresses
+        let instance_vertex_buffer_addresses = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::SHADER_DEVICE_ADDRESS | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            vec![blas_vertex_buffer.device_address().unwrap().get()],
+        )
+        .unwrap();
 
         Scene {
             general_queue,
@@ -103,8 +125,7 @@ where
             memory_allocator,
             objects: BTreeMap::new(),
             tlas,
-            tl_vertex_buffer,
-            tl_geometry_offset_buffer,
+            instance_vertex_buffer_addresses,
             tlas_state: TopLevelAccelerationStructureState::UpToDate,
         }
     }
@@ -170,124 +191,77 @@ where
         }
     }
 
-    pub fn tlas(
-        &mut self,
-    ) -> (
-        Arc<AccelerationStructure>,
-        Subbuffer<[u32]>,
-        Subbuffer<[Vertex]>,
-    ) {
-        match self.tlas_state {
-            TopLevelAccelerationStructureState::UpToDate => {}
-            // if the tlas needs to be updated, then we just need to rebuild it (and nothing else)
-            TopLevelAccelerationStructureState::NeedsUpdate => {
-                // await all the blas futures on the cpu
-                for object in self.objects.values().flatten() {
-                    object.blas_build_future.wait(None).unwrap();
-                }
+    pub fn tlas(&mut self) -> (Arc<AccelerationStructure>, Subbuffer<[u64]>) {
+        // need to update instance vertex buffer addresses if an object was added or removed
+        if self.tlas_state == TopLevelAccelerationStructureState::NeedsRebuild {
+            let instance_vertex_buffer_addresses = self
+                .objects
+                .values()
+                .flatten()
+                .map(|object| object.vertex_buffer.device_address().unwrap().get())
+                .collect::<Vec<_>>();
 
-                let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
-                    Some(self.tlas.clone()),
-                    self.memory_allocator.clone(),
-                    &self.command_buffer_allocator,
-                    self.general_queue.clone(),
-                    &self
-                        .objects
-                        .values()
-                        .flatten()
-                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
-                        .collect::<Vec<_>>(),
-                );
-
-                // wait for build
-                tlas_build_future
-                    .then_signal_fence_and_flush()
-                    .unwrap()
-                    .wait(None)
-                    .unwrap();
-
-                // update state
-                self.tlas = tlas;
-                self.tlas_state = TopLevelAccelerationStructureState::UpToDate;
-            }
-            // if the tlas needs to be rebuilt, then we need to build both the tlas and the vertex buffer data
-            TopLevelAccelerationStructureState::NeedsRebuild => {
-                let t0 = std::time::Instant::now();
-
-                println!("rebuilding tlas");
-                // await all the blas futures on the cpu
-                for object in self.objects.values().flatten() {
-                    object.blas_build_future.wait(None).unwrap();
-                }
-                dbg!(t0.elapsed().as_secs_f32());
-
-                // initialize tlas build
-                let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
-                    None,
-                    self.memory_allocator.clone(),
-                    &self.command_buffer_allocator,
-                    self.general_queue.clone(),
-                    &self
-                        .objects
-                        .values()
-                        .flatten()
-                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
-                        .collect::<Vec<_>>(),
-                );
-
-                // actually submit acceleration structure build future
-                let tlas_build_future = tlas_build_future.then_signal_fence_and_flush().unwrap();
-
-                tlas_build_future.wait(None).unwrap();
-
-                dbg!(t0.elapsed().as_secs_f32());
-                
-                println!("copying vertex buffers");
-
-                let t0 = std::time::Instant::now();
-
-                // start building the tlas vertex buffer
-                let (tlas_vertex_buffer, tlas_geometry_offset_buffer, tlas_vertex_buffer_future) =
-                    tlas_vertex_buffer(
-                        self.transfer_queue.clone(),
-                        self.memory_allocator.clone(),
-                        &self.command_buffer_allocator,
-                        self.objects
-                            .values()
-                            .flatten()
-                            .map(|Object { vertex_buffer, .. }| vertex_buffer)
-                            .cloned()
-                            .collect(),
-                    );
-
-
-                // actually submit future
-                let top_level_vertex_buffer_future = tlas_vertex_buffer_future
-                    .then_signal_fence_and_flush()
-                    .unwrap();
-
-                top_level_vertex_buffer_future.wait(None).unwrap();
-
-                dbg!(t0.elapsed().as_secs_f32());
-
-                // update state
-                self.tlas = tlas;
-                self.tl_vertex_buffer = tlas_vertex_buffer;
-                self.tl_geometry_offset_buffer = tlas_geometry_offset_buffer;
-                self.tlas_state = TopLevelAccelerationStructureState::UpToDate;
-
-                // print top level geometry offset buffer
-                //dbg!(self.tl_vertex_buffer.len());
-                //dbg!(&self.tl_vertex_buffer.read().unwrap().to_vec().last());
-                //dbg!(self.tl_geometry_offset_buffer.read().unwrap().to_vec());
-            }
+            self.instance_vertex_buffer_addresses = Buffer::from_iter(
+                self.memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::SHADER_DEVICE_ADDRESS | BufferUsage::STORAGE_BUFFER,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                instance_vertex_buffer_addresses,
+            )
+            .unwrap();
         }
+
+        if self.tlas_state != TopLevelAccelerationStructureState::UpToDate {
+            let t0 = std::time::Instant::now();
+
+            println!("rebuilding tlas");
+            // await all the blas futures on the cpu
+            for object in self.objects.values().flatten() {
+                object.blas_build_future.wait(None).unwrap();
+            }
+
+            let previous_acceleration_structure = match self.tlas_state {
+                TopLevelAccelerationStructureState::NeedsUpdate => Some(self.tlas.clone()),
+                TopLevelAccelerationStructureState::NeedsRebuild => None,
+                _ => unreachable!(),
+            };
+
+            // initialize tlas build
+            let (tlas, tlas_build_future) = create_top_level_acceleration_structure(
+                previous_acceleration_structure,
+                self.memory_allocator.clone(),
+                &self.command_buffer_allocator,
+                self.general_queue.clone(),
+                &self
+                    .objects
+                    .values()
+                    .flatten()
+                    .map(|Object { blas, .. }| blas as &AccelerationStructure)
+                    .collect::<Vec<_>>(),
+            );
+
+            // actually submit acceleration structure build future
+            let tlas_build_future = tlas_build_future.then_signal_fence_and_flush().unwrap();
+
+            tlas_build_future.wait(None).unwrap();
+
+            // update state
+            self.tlas = tlas;
+        }
+
+        // at this point the tlas is up to date
+        self.tlas_state = TopLevelAccelerationStructureState::UpToDate;
 
         // return the tlas
         return (
             self.tlas.clone(),
-            self.tl_geometry_offset_buffer.clone(),
-            self.tl_vertex_buffer.clone(),
+            self.instance_vertex_buffer_addresses.clone(),
         );
     }
 }
@@ -310,8 +284,7 @@ where
         memory_allocator,
         BufferCreateInfo {
             usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                | BufferUsage::SHADER_DEVICE_ADDRESS
-                | BufferUsage::TRANSFER_SRC,
+                | BufferUsage::SHADER_DEVICE_ADDRESS,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -322,97 +295,6 @@ where
         vertexes,
     )
     .unwrap()
-}
-
-// constructs a vertex buffer consisting of all the vertexes in the blas_vertex_buffers
-// returns the vertex buffer + a future of when the copy is complete
-fn tlas_vertex_buffer<Vertex>(
-    queue: Arc<Queue>,
-    memory_allocator: Arc<dyn MemoryAllocator>,
-    command_buffer_allocator: &StandardCommandBufferAllocator,
-    mut blas_vertex_buffers: Vec<Subbuffer<[Vertex]>>,
-) -> (Subbuffer<[Vertex]>, Subbuffer<[u32]>, Box<dyn GpuFuture>)
-where
-    Vertex: Clone + Default + BufferContents,
-{
-    // if there are no vertex buffers, then we create a dummy vertex buffer to permit the TLAS to be built
-    if blas_vertex_buffers.len() == 0 {
-        let dummy_vertex_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC | BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            vec![Vertex::default(), Vertex::default(), Vertex::default()],
-        )
-        .unwrap();
-        blas_vertex_buffers.push(dummy_vertex_buffer);
-    }
-
-    // create one time command buffer
-    let mut builder = AutoCommandBufferBuilder::primary(
-        command_buffer_allocator,
-        queue.queue_family_index(),
-        CommandBufferUsage::OneTimeSubmit,
-    )
-    .unwrap();
-
-    let tlas_vertex_buffer = Buffer::new_slice::<Vertex>(
-        memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::TRANSFER_DST | BufferUsage::STORAGE_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
-            ..Default::default()
-        },
-        blas_vertex_buffers.iter().map(|buffer| buffer.len()).sum(),
-    )
-    .unwrap();
-
-    dbg!(tlas_vertex_buffer.len());
-
-    // find the geometry offsets
-    let mut geometry_offsets = Vec::new();
-    let mut cur_geometry_offset = 0;
-    for blas_vertex_buffer in blas_vertex_buffers.iter() {
-        geometry_offsets.push(cur_geometry_offset);
-        cur_geometry_offset += blas_vertex_buffer.len() as u32;
-    }
-
-    // create buffer of all vertexes
-    for (i, blas_vertex_buffer) in blas_vertex_buffers.iter().enumerate() {
-        let mut cbi =
-            CopyBufferInfoTyped::buffers(blas_vertex_buffer.clone(), tlas_vertex_buffer.clone());
-        cbi.regions[0].dst_offset = geometry_offsets[i] as u64;
-        builder.copy_buffer(cbi).unwrap();
-    }
-
-    let tlas_geometry_offset_buffer = Buffer::from_iter(
-        memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        geometry_offsets,
-    )
-    .unwrap();
-
-    // submit buffer
-    let future = builder.build().unwrap().execute(queue).unwrap().boxed();
-
-    (tlas_vertex_buffer, tlas_geometry_offset_buffer, future)
 }
 
 fn create_top_level_acceleration_structure(
@@ -426,10 +308,7 @@ fn create_top_level_acceleration_structure(
         .iter()
         .map(
             |&bottom_level_acceleration_structure| AccelerationStructureInstance {
-                instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
-                    0,
-                    0,
-                ),
+                instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(0, 0),
                 acceleration_structure_reference: bottom_level_acceleration_structure
                     .device_address()
                     .get(),
@@ -437,14 +316,6 @@ fn create_top_level_acceleration_structure(
             },
         )
         .collect::<Vec<_>>();
-
-    // if there are no instances, then we create a dummy inactive instance to permit the TLAS to be built
-    if instances.len() == 0 {
-        instances.push(AccelerationStructureInstance {
-            instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(0, 0),
-            ..Default::default()
-        });
-    }
 
     let values = Buffer::from_iter(
         memory_allocator.clone(),

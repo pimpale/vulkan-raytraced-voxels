@@ -64,6 +64,7 @@ pub fn get_device_for_rendering_on(
         buffer_device_address: true,
         dynamic_rendering: true,
         ray_query: true,
+        shader_int64: true,
         ..Features::empty()
     };
     let (physical_device, general_queue_family_index, transfer_queue_family_index) = instance
@@ -358,8 +359,7 @@ impl Renderer {
     pub fn render(
         &mut self,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
-        top_level_geometry_offset_buffer: Subbuffer<[u32]>,
-        top_level_vertex_buffer: Subbuffer<[Vertex3D]>,
+        instance_vertex_buffer_addresses: Subbuffer<[u64]>,
         eye: Point3<f32>,
         front: Vector3<f32>,
         right: Vector3<f32>,
@@ -412,8 +412,7 @@ impl Renderer {
             self.pipeline.layout().set_layouts().get(0).unwrap().clone(),
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
-                WriteDescriptorSet::buffer(1, top_level_geometry_offset_buffer),
-                WriteDescriptorSet::buffer(2, top_level_vertex_buffer),
+                WriteDescriptorSet::buffer(1, instance_vertex_buffer_addresses),
             ],
             [],
         )
