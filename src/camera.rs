@@ -80,7 +80,7 @@ impl SphericalCamera {
             worldup: Vector3::new(0.0, -1.0, 0.0),
             pitch: 0.0,
             yaw: 0.0,
-            offset: 100.0,
+            offset: 5.0,
             mouse_down: false,
             mouse_start: Default::default(),
             mouse_prev: Default::default(),

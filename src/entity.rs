@@ -6,6 +6,7 @@ use std::sync::Arc;
 use nalgebra::Isometry3;
 use nalgebra::Vector3;
 
+use rapier3d::geometry::Collider;
 use threadpool::ThreadPool;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -27,10 +28,13 @@ use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
 use crate::render_system::vertex::Vertex3D;
 
+
 pub struct EntityCreationPhysicsData {
     // if true, the object can be moved by the physics engine
-    // if false, then the object will not move due to forces. If hitbox is specified, it can still be collided with
+    // if false, then the object will not move due to forces.
     pub is_dynamic: bool,
+    // If hitbox is specified, it can still be collided with even if is_dynamic is false
+    pub hitbox: Collider, 
 }
 
 pub struct EntityCreationData {
@@ -54,7 +58,7 @@ pub enum WorldChange {
     AddEntity(u32, EntityCreationData),
     RemoveEntity(u32),
     UpdateEntityIsometry(u32, Isometry3<f32>),
-    AddImpulseEntity {
+    MoveEntity {
         id: u32,
         velocity: Vector3<f32>,
         torque: Vector3<f32>,
@@ -216,11 +220,13 @@ impl GameWorld {
         let (
             top_level_acceleration_structure,
             instance_vertex_buffer_addresses,
+            instance_transforms,
         ) = self.scene.borrow_mut().tlas();
         // render to screen
         self.renderer.render(
             top_level_acceleration_structure,
             instance_vertex_buffer_addresses,
+            instance_transforms,
             eye,
             front,
             right,

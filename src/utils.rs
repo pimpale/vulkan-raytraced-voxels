@@ -1,7 +1,7 @@
 use nalgebra::{Point3, Vector3};
+use rapier3d::geometry::{Collider, ColliderBuilder};
 
 use crate::render_system::vertex::Vertex3D as Vertex;
-
 
 pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 3]) -> Vec<Vertex> {
     let points: Vec<Vector3<f32>> = points
@@ -145,4 +145,10 @@ pub fn get_aabb(obj: &[Vertex]) -> Vector3<f32> {
         }
     }
     max - min
+}
+
+pub fn get_aabb_hitbox(obj: &[Vertex]) -> Collider {
+    let dims = get_aabb(obj);
+    // cuboid uses half-extents, so we divide by 2
+    ColliderBuilder::cuboid(dims[0] / 2.0, dims[1] / 2.0, dims[2] / 2.0).build()
 }

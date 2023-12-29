@@ -45,7 +45,7 @@ impl BlockDefinitionTable {
     ) -> BlockDefinitionTable {
         let block_textures_offset = current_texture_atlas.len();
 
-        let blocks: Vec<BlockDefinition> = std::fs::read_dir(assets_path)
+        let mut blocks: Vec<BlockDefinition> = std::fs::read_dir(assets_path)
             .unwrap()
             .map(|x| x.unwrap())
             .map(|x| {
@@ -55,6 +55,9 @@ impl BlockDefinitionTable {
                 BlockDefinition { name, transparent }
             })
             .collect();
+
+        // ensure all transparent blocks are at the end, so that we can use the block index as texture index
+        blocks.sort_by_key(|x| x.transparent);
 
         for block in &blocks {
             if block.transparent {
@@ -69,11 +72,13 @@ impl BlockDefinitionTable {
                 BlockFace::BACK,
                 BlockFace::FRONT,
             ] {
-                let texture_path = format!("{}/{}/{}.ff", assets_path, block.name, face);
+                let texture_path = format!("{}/{}/{}.png", assets_path, block.name, face);
                 let texture = image::open(texture_path).unwrap().to_rgba8();
                 current_texture_atlas.push(texture);
             }
         }
+
+        dbg!(current_texture_atlas.len(), block_textures_offset);
         BlockDefinitionTable {
             block_textures_offset,
             blocks,

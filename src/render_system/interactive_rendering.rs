@@ -23,7 +23,7 @@ use vulkano::{
     image::{
         sampler::{Sampler, SamplerAddressMode, SamplerCreateInfo},
         view::ImageView,
-        Image, ImageCreateInfo, ImageType, ImageUsage,
+        Image, ImageCreateInfo, ImageType, ImageUsage, SampleCount,
     },
     instance::Instance,
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
@@ -248,6 +248,7 @@ pub struct Renderer {
     pipeline: Arc<GraphicsPipeline>,
     wdd_needs_rebuild: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
+    frame_count: u32,
 }
 
 fn load_textures(
@@ -384,7 +385,10 @@ impl Renderer {
                     input_assembly_state: Some(InputAssemblyState::default()),
                     viewport_state: Some(ViewportState::default()),
                     rasterization_state: Some(RasterizationState::default()),
-                    multisample_state: Some(MultisampleState::default()),
+                    multisample_state: Some(MultisampleState {
+                        rasterization_samples: SampleCount::Sample1,
+                        ..Default::default()
+                    }),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
                         subpass.color_attachment_formats.len() as u32,
                         ColorBlendAttachmentState::default(),
@@ -450,6 +454,7 @@ impl Renderer {
             wdd_needs_rebuild: false,
             quad_buffer,
             material_descriptor_set,
+            frame_count: 0,
         }
     }
 
@@ -473,6 +478,7 @@ impl Renderer {
         &mut self,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
         instance_vertex_buffer_addresses: Subbuffer<[u64]>,
+        instance_transforms: Subbuffer<[[[f32; 4]; 4]]>,
         eye: Point3<f32>,
         front: Vector3<f32>,
         right: Vector3<f32>,
@@ -526,6 +532,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_vertex_buffer_addresses),
+                WriteDescriptorSet::buffer(2, instance_transforms),
             ],
             [],
         )
@@ -564,6 +571,7 @@ impl Renderer {
                     right: <[f32; 3]>::from(right).into(),
                     up: <[f32; 3]>::from(up).into(),
                     aspect: extent[0] as f32 / extent[1] as f32,
+                    frame: self.frame_count,
                 },
             )
             .unwrap()
@@ -601,5 +609,7 @@ impl Renderer {
                 self.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
             }
         }
+
+        self.frame_count = self.frame_count.wrapping_add(1);
     }
 }

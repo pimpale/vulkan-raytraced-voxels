@@ -1,14 +1,15 @@
-use std::sync::Arc;
+use std::{f32::consts::E, sync::Arc, thread::current};
 
-use nalgebra::Point3;
+use nalgebra::{Isometry3, Point3};
 use noise::{NoiseFn, OpenSimplex};
+use rapier3d::geometry::{Collider, ColliderBuilder, SharedShape};
 
 use super::block::{BlockDefinitionTable, BlockFace, BlockIdx};
 use crate::render_system::vertex::Vertex3D;
 
-pub const CHUNK_X_SIZE: usize = 32;
-pub const CHUNK_Y_SIZE: usize = 32;
-pub const CHUNK_Z_SIZE: usize = 32;
+pub const CHUNK_X_SIZE: usize = 8;
+pub const CHUNK_Y_SIZE: usize = 8;
+pub const CHUNK_Z_SIZE: usize = 8;
 
 pub fn chunk_idx(x: usize, y: usize, z: usize) -> usize {
     CHUNK_Z_SIZE * CHUNK_Y_SIZE * x + CHUNK_Z_SIZE * y + z
@@ -43,12 +44,12 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
                 let wx = x as f64 + chunk_offset[0] as f64;
                 let wy = y as f64 + chunk_offset[1] as f64;
                 let wz = z as f64 + chunk_offset[2] as f64;
-                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]);
+                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 50.0;
                 let val_above = data
                     .noise
-                    .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1]);
+                    .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1]) - (wy+1.0) / 50.0;
 
-                let thresh = 0.2;
+                let thresh = 0.0;
                 if val_here > thresh {
                     if val_above > thresh {
                         blocks[xyzidx] = stone;
@@ -62,6 +63,43 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
         }
     }
     blocks
+}
+
+pub fn gen_hitbox(blocks: &BlockDefinitionTable, chunk_data: &Vec<BlockIdx>) -> Option<Collider> {
+    let mut sub_colliders = vec![];
+
+    let mut append_hitbox = |x: usize, z: usize, y_start: usize, y_end: usize| {
+        let collider = SharedShape::cuboid(0.5, (y_end - y_start) as f32 * 0.5, 0.5);
+        let position = Isometry3::from(Point3::new(
+            x as f32 + 0.5,
+            (y_end - y_start) as f32 + 0.5,
+            z as f32 + 0.5,
+        ));
+        sub_colliders.push((position, collider));
+    };
+
+    for x in 0..CHUNK_X_SIZE {
+        for z in 0..CHUNK_Z_SIZE {
+            let mut current_stretch = 0;
+            for y in 0..CHUNK_Y_SIZE {
+                if blocks.transparent(chunk_data[chunk_idx(x, y, z)]) {
+                    if current_stretch > 0 {
+                        append_hitbox(x, z, y - current_stretch, y);
+                    }
+                    current_stretch = 0;
+                } else {
+                    current_stretch += 1;
+                }
+            }
+            if current_stretch > 0 {
+                append_hitbox(x, z, CHUNK_Y_SIZE - current_stretch, CHUNK_Y_SIZE);
+            }
+        }
+    }
+    match sub_colliders.len() {
+        0 => None,
+        _ => Some(ColliderBuilder::compound(sub_colliders).build()),
+    }
 }
 
 pub struct NeighboringChunkData<'a> {
@@ -112,14 +150,14 @@ pub fn gen_mesh<'a>(
 
     for x in 0..CHUNK_X_SIZE {
         for z in 0..CHUNK_Z_SIZE {
-            up_slice[yslice_idx(x, z)] =
-                neighboring_chunk_data.up[chunk_idx(x, CHUNK_Y_SIZE - 1, z)];
+            down_slice[yslice_idx(x, z)] =
+                neighboring_chunk_data.down[chunk_idx(x, CHUNK_Y_SIZE - 1, z)];
         }
     }
 
     for x in 0..CHUNK_X_SIZE {
         for z in 0..CHUNK_Z_SIZE {
-            down_slice[yslice_idx(x, z)] = neighboring_chunk_data.down[chunk_idx(x, 0, z)];
+            up_slice[yslice_idx(x, z)] = neighboring_chunk_data.up[chunk_idx(x, 0, z)];
         }
     }
 
@@ -158,13 +196,14 @@ pub fn gen_mesh<'a>(
                     chunk_data[chunk_idx(x + 1, y, z)]
                 };
 
-                let up_block_idx = if y == 0 {
-                    up_slice[yslice_idx(x, z)]
+                let down_block_idx = if y == 0 {
+                    down_slice[yslice_idx(x, z)]
                 } else {
                     chunk_data[chunk_idx(x, y - 1, z)]
                 };
-                let down_block_idx = if y == CHUNK_Y_SIZE - 1 {
-                    down_slice[yslice_idx(x, z)]
+
+                let up_block_idx = if y == CHUNK_Y_SIZE - 1 {
+                    up_slice[yslice_idx(x, z)]
                 } else {
                     chunk_data[chunk_idx(x, y + 1, z)]
                 };
@@ -197,67 +236,117 @@ pub fn gen_mesh<'a>(
                 // left face
                 if blocks.transparent(left_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::LEFT);
-                    vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v010, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v001, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v001, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v010, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+                    // before reversing the order of vertexes, 
+                    // vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v011, t, [0.0, 0.0]));
+                    // after reversing the order of the vertexes
+                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v011, t, [0.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
                 }
 
                 // right face
                 if blocks.transparent(right_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::RIGHT);
-                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v101, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v110, t, [1.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v101, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v111, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v110, t, [1.0, 1.0]));
-                }
-
-                // upper face
-                if blocks.transparent(up_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::UP);
-                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    // before reversing the order of vertexes,
+                    // vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v111, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+                    // after reversing the order of the vertexes
+                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v111, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
                 }
 
                 // lower face
                 if blocks.transparent(down_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::DOWN);
+                    // before reversing the order of vertexes,
+                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+                    // after reversing the order of the vertexes
+                    vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+                }
+
+                // upper face
+                if blocks.transparent(up_block_idx) {
+                    let t = blocks.get_texture_offset(block_idx, BlockFace::UP);
+                    // before reversing the order of vertexes,
+                    // vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v111, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+                    // after reversing the order of the vertexes
+                    vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v111, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+
                 }
 
                 // back face
                 if blocks.transparent(back_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::BACK);
-                    vertexes.push(Vertex3D::new2(v000, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v100, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v010, t, [1.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v100, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v110, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v010, t, [1.0, 1.0]));
+                    // before reversing the order of vertexes,
+                    // vertexes.push(Vertex3D::new2(v000, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v110, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
+                    // after reversing the order of the vertexes
+                    vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v000, t, [0.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v110, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
+
                 }
 
                 // front face
                 if blocks.transparent(front_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::FRONT);
-                    vertexes.push(Vertex3D::new2(v011, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v101, t, [1.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v001, t, [0.0, 0.0]));
-                    vertexes.push(Vertex3D::new2(v011, t, [0.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v111, t, [1.0, 1.0]));
-                    vertexes.push(Vertex3D::new2(v101, t, [1.0, 0.0]));
+                    // before reversing the order of vertexes,
+                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
+                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v111, t, [0.0, 0.0]));
+                    // vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
+                    // after reversing the order of the vertexes
+                    vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
+                    vertexes.push(Vertex3D::new2(v111, t, [0.0, 0.0]));
+                    vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
                 }
             }
         }

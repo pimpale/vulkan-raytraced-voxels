@@ -10,6 +10,7 @@ use std::{
 
 use nalgebra::{Isometry3, Point3, Vector3};
 use noise::{NoiseFn, OpenSimplex};
+use rapier3d::geometry::Collider;
 use threadpool::ThreadPool;
 
 use crate::{
@@ -45,7 +46,7 @@ struct Chunk {
 
 enum ChunkWorkerEvent {
     ChunkGenerated(Point3<i32>, Vec<BlockIdx>),
-    ChunkMeshed(Point3<i32>, Instant, Vec<Vertex3D>),
+    ChunkMeshed(Point3<i32>, Instant, Vec<Vertex3D>, Option<Collider>),
 }
 
 pub struct ChunkManager {
@@ -139,14 +140,14 @@ impl ChunkManager {
             .data
             .clone()
             .unwrap();
-        let up = self
+        let down = self
             .chunks
             .get(&(chunk_position + Vector3::new(0, -1, 0)))
             .unwrap()
             .data
             .clone()
             .unwrap();
-        let down = self
+        let up = self
             .chunks
             .get(&(chunk_position + Vector3::new(0, 1, 0)))
             .unwrap()
@@ -168,7 +169,7 @@ impl ChunkManager {
             .clone()
             .unwrap();
 
-        [left, right, up, down, back, front]
+        [left, right, down, up, back, front]
     }
 
     fn chunk_should_be_loaded(&self, chunk_position: Point3<i32>) -> bool {
@@ -233,7 +234,7 @@ impl ChunkManager {
                 let data = chunk.data.clone().unwrap();
                 let mesh_stale_time = chunk.mesh_stale.unwrap();
 
-                let [left, right, up, down, back, front] =
+                let [left, right, down, up, back, front] =
                     self.get_neighboring_chunks(chunk_position);
 
                 self.threadpool.execute(move || {
@@ -243,17 +244,20 @@ impl ChunkManager {
                         NeighboringChunkData {
                             left: &left,
                             right: &right,
-                            up: &up,
                             down: &down,
+                            up: &up,
                             back: &back,
                             front: &front,
                         },
                     );
 
+                    let hitbox = chunk::gen_hitbox(&block_table, &data);
+
                     let _ = event_sender.send(ChunkWorkerEvent::ChunkMeshed(
                         chunk_position,
                         mesh_stale_time,
                         mesh,
+                        hitbox,
                     ));
                 });
                 let chunk = self.chunks.get_mut(&chunk_position).unwrap();
@@ -285,7 +289,7 @@ impl ChunkManager {
                         }
                     }
                 }
-                ChunkWorkerEvent::ChunkMeshed(chunk_position, became_stale_at, mesh) => {
+                ChunkWorkerEvent::ChunkMeshed(chunk_position, became_stale_at, mesh, hitbox) => {
                     if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
                         if chunk.mesh_stale.unwrap() > became_stale_at {
                             // this mesh is stale, ignore it
@@ -314,7 +318,13 @@ impl ChunkManager {
                                     chunk_position[1] as f32 * CHUNK_Y_SIZE as f32,
                                     chunk_position[2] as f32 * CHUNK_Z_SIZE as f32,
                                 ),
-                                physics: None,
+                                physics: match hitbox {
+                                    Some(hitbox) => Some(EntityCreationPhysicsData {
+                                        is_dynamic: false,
+                                        hitbox,
+                                    }),
+                                    None => None,
+                                },
                             },
                         ));
                     }

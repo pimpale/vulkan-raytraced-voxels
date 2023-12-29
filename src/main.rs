@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use entity::{
-    EntityCreationData, EntityCreationPhysicsData, GameWorld,
-};
+use entity::{EntityCreationData, EntityCreationPhysicsData, GameWorld};
 use nalgebra::{Isometry3, Vector3};
+use rapier3d::geometry::ColliderBuilder;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::swapchain::Surface;
@@ -80,11 +79,15 @@ fn build_scene(
     );
 
     // add ego agent
+    let ego_mesh = utils::unitcube();
     world.add_entity(
         0,
         EntityCreationData {
-            physics: Some(EntityCreationPhysicsData { is_dynamic: true }),
-            mesh: utils::unitcube(),
+            physics: Some(EntityCreationPhysicsData {
+                is_dynamic: true,
+                hitbox: utils::get_aabb_hitbox(&ego_mesh),
+            }),
+            mesh: ego_mesh,
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
         },
     );
@@ -114,11 +117,15 @@ fn build_scene(
     );
 
     // add ground
+    let ground_mesh = utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]);
     world.add_entity(
         3,
         EntityCreationData {
-            physics: Some(EntityCreationPhysicsData { is_dynamic: false }),
-            mesh: utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]),
+            physics: Some(EntityCreationPhysicsData {
+                is_dynamic: false,
+                hitbox: utils::get_aabb_hitbox(&ground_mesh),
+            }),
+            mesh: ground_mesh,
             isometry: Isometry3::identity(),
         },
     );
@@ -145,10 +152,11 @@ fn main() {
 
     let surface = Surface::from_window(instance.clone(), window).unwrap();
 
-    let (device, general_queue, transfer_queue) = render_system::interactive_rendering::get_device_for_rendering_on(
-        instance.clone(),
-        surface.clone(),
-    );
+    let (device, general_queue, transfer_queue) =
+        render_system::interactive_rendering::get_device_for_rendering_on(
+            instance.clone(),
+            surface.clone(),
+        );
 
     //Print some info about the device currently being used
     println!(

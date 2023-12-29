@@ -9,12 +9,12 @@ use vulkano::{
         AccelerationStructureGeometries, AccelerationStructureGeometryInstancesData,
         AccelerationStructureGeometryInstancesDataType, AccelerationStructureGeometryTrianglesData,
         AccelerationStructureInstance, AccelerationStructureType, BuildAccelerationStructureFlags,
-        BuildAccelerationStructureMode, GeometryFlags, GeometryInstanceFlags,
+        BuildAccelerationStructureMode, GeometryFlags,
     },
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        CopyBufferInfoTyped, PrimaryCommandBufferAbstract,
+        PrimaryCommandBufferAbstract,
     },
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
@@ -47,6 +47,7 @@ pub struct Scene<K, Vertex> {
     objects: BTreeMap<K, Option<Object<Vertex>>>,
     tlas: Arc<AccelerationStructure>,
     instance_vertex_buffer_addresses: Subbuffer<[u64]>,
+    instance_transforms: Subbuffer<[[[f32; 4]; 4]]>,
     tlas_state: TopLevelAccelerationStructureState,
 }
 
@@ -118,6 +119,22 @@ where
         )
         .unwrap();
 
+        // create instance transforms
+        let instance_transforms = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            vec![Matrix4::identity().into()],
+        )
+        .unwrap();
+
         Scene {
             general_queue,
             transfer_queue,
@@ -126,6 +143,7 @@ where
             objects: BTreeMap::new(),
             tlas,
             instance_vertex_buffer_addresses,
+            instance_transforms,
             tlas_state: TopLevelAccelerationStructureState::UpToDate,
         }
     }
@@ -191,7 +209,13 @@ where
         }
     }
 
-    pub fn tlas(&mut self) -> (Arc<AccelerationStructure>, Subbuffer<[u64]>) {
+    pub fn tlas(
+        &mut self,
+    ) -> (
+        Arc<AccelerationStructure>,
+        Subbuffer<[u64]>,
+        Subbuffer<[[[f32; 4]; 4]]>,
+    ) {
         // need to update instance vertex buffer addresses if an object was added or removed
         if self.tlas_state == TopLevelAccelerationStructureState::NeedsRebuild {
             let instance_vertex_buffer_addresses = self
@@ -246,10 +270,33 @@ where
             // actually submit acceleration structure build future
             let tlas_build_future = tlas_build_future.then_signal_fence_and_flush().unwrap();
 
+            // in the meanwhile, copy the instance transforms
+            let instance_transforms = Buffer::from_iter(
+                self.memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::STORAGE_BUFFER,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                self.objects
+                    .values()
+                    .flatten()
+                    .map(|Object { isometry, .. }| {
+                        <[[f32; 4]; 4]>::from(Matrix4::from(isometry.clone()))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+
             tlas_build_future.wait(None).unwrap();
 
             // update state
             self.tlas = tlas;
+            self.instance_transforms = instance_transforms;
         }
 
         // at this point the tlas is up to date
@@ -259,6 +306,7 @@ where
         return (
             self.tlas.clone(),
             self.instance_vertex_buffer_addresses.clone(),
+            self.instance_transforms.clone(),
         );
     }
 }

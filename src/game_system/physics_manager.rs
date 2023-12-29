@@ -59,26 +59,22 @@ impl PhysicsManager {
     fn add_entity(&mut self, entity_id: u32, entity_creation_data: &EntityCreationData) {
         let EntityCreationData {
             physics,
-            mesh,
             isometry,
+            ..
         } = entity_creation_data;
 
         // add to physics solver if necessary
-        if let Some(EntityCreationPhysicsData { is_dynamic }) = physics {
-            // cuboid constructor uses "half-extents", which is just half of the cuboid's width, height, and depth
-            let hitbox = utils::get_aabb(&mesh) / 2.0;
+        if let Some(EntityCreationPhysicsData { is_dynamic, hitbox }) = physics {
             let rigid_body = match is_dynamic {
-                true => RigidBodyBuilder::dynamic(),
+                true => RigidBodyBuilder::kinematic_velocity_based(),
                 false => RigidBodyBuilder::fixed(),
             }
             .position(isometry.clone())
             .build();
 
-            let collider = ColliderBuilder::cuboid(hitbox.x, hitbox.y, hitbox.z).build();
-
             let rigid_body_handle = self.rigid_body_set.insert(rigid_body);
             self.collider_set.insert_with_parent(
-                collider,
+                hitbox.clone(),
                 rigid_body_handle,
                 &mut self.rigid_body_set,
             );
@@ -116,15 +112,15 @@ impl Manager for PhysicsManager {
                 WorldChange::RemoveEntity(id) => {
                     self.remove_entity(*id);
                 }
-                WorldChange::AddImpulseEntity {
+                WorldChange::MoveEntity {
                     id,
                     velocity,
                     torque,
                 } => {
                     if let Some(handle) = self.entities.get(id) {
                         let rigid_body = self.rigid_body_set.get_mut(*handle).unwrap();
-                        rigid_body.apply_impulse(*velocity, true);
-                        rigid_body.apply_torque_impulse(*torque, true);
+                        rigid_body.set_linvel(*velocity, true);
+                        rigid_body.set_angvel(*torque, true);
                     }
                 }
                 _ => {}
