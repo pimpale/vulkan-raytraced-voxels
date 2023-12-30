@@ -76,12 +76,12 @@ pub fn polyline(
         .zip(colors)
         .flat_map(|((l, r), color)| {
             vec![
+                Vertex::new(r[0].into(), color),
+                Vertex::new(l[1].into(), color),
                 Vertex::new(l[0].into(), color),
-                Vertex::new(l[1].into(), color),
-                Vertex::new(r[0].into(), color),
-                Vertex::new(r[0].into(), color),
-                Vertex::new(l[1].into(), color),
                 Vertex::new(r[1].into(), color),
+                Vertex::new(l[1].into(), color),
+                Vertex::new(r[0].into(), color),
             ]
         })
         .collect();

@@ -30,9 +30,9 @@ const MIN_RENDER_RADIUS_Y: i32 = 5;
 const MIN_RENDER_RADIUS_Z: i32 = 5;
 
 // if a chunk is within this boundary it will stop rendering
-const MAX_RENDER_RADIUS_X: i32 = 7;
-const MAX_RENDER_RADIUS_Y: i32 = 7;
-const MAX_RENDER_RADIUS_Z: i32 = 7;
+const MAX_RENDER_RADIUS_X: i32 = 8;
+const MAX_RENDER_RADIUS_Y: i32 = 8;
+const MAX_RENDER_RADIUS_Z: i32 = 8;
 
 struct Chunk {
     data: Option<Arc<Vec<BlockIdx>>>,
@@ -251,8 +251,8 @@ impl ChunkManager {
                         },
                     );
 
-                    let hitbox = chunk::gen_hitbox(&block_table, &data);
-
+                    //let hitbox = chunk::gen_hitbox(&block_table, &data);
+                    let hitbox = None;
                     let _ = event_sender.send(ChunkWorkerEvent::ChunkMeshed(
                         chunk_position,
                         mesh_stale_time,

@@ -204,7 +204,7 @@ where
 
     pub fn remove_object(&mut self, key: K) {
         let removed = self.objects.remove(&key);
-        if removed.is_some() {
+        if removed.flatten().is_some() {
             self.tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
         }
     }

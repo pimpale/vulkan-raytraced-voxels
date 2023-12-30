@@ -1,4 +1,4 @@
-use std::{f32::consts::E, sync::Arc, thread::current};
+use std::sync::Arc;
 
 use nalgebra::{Isometry3, Point3};
 use noise::{NoiseFn, OpenSimplex};
@@ -7,9 +7,9 @@ use rapier3d::geometry::{Collider, ColliderBuilder, SharedShape};
 use super::block::{BlockDefinitionTable, BlockFace, BlockIdx};
 use crate::render_system::vertex::Vertex3D;
 
-pub const CHUNK_X_SIZE: usize = 8;
-pub const CHUNK_Y_SIZE: usize = 8;
-pub const CHUNK_Z_SIZE: usize = 8;
+pub const CHUNK_X_SIZE: usize = 32;
+pub const CHUNK_Y_SIZE: usize = 32;
+pub const CHUNK_Z_SIZE: usize = 32;
 
 pub fn chunk_idx(x: usize, y: usize, z: usize) -> usize {
     CHUNK_Z_SIZE * CHUNK_Y_SIZE * x + CHUNK_Z_SIZE * y + z
@@ -34,6 +34,8 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
     let air = data.block_definition_table.block_idx("air").unwrap();
     let grass = data.block_definition_table.block_idx("grass").unwrap();
     let stone = data.block_definition_table.block_idx("stone").unwrap();
+    let lamp = data.block_definition_table.block_idx("lamp").unwrap();
+
 
     let scale1 = 20.0;
     for x in 0..CHUNK_X_SIZE {
@@ -44,12 +46,12 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
                 let wx = x as f64 + chunk_offset[0] as f64;
                 let wy = y as f64 + chunk_offset[1] as f64;
                 let wz = z as f64 + chunk_offset[2] as f64;
-                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 50.0;
+                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 100.0;
                 let val_above = data
                     .noise
-                    .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1]) - (wy+1.0) / 50.0;
+                    .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1]) - (wy+1.0) / 100.0;
 
-                let thresh = 0.0;
+                let thresh = 0.2;
                 if val_here > thresh {
                     if val_above > thresh {
                         blocks[xyzidx] = stone;
@@ -62,6 +64,7 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
             }
         }
     }
+    blocks[chunk_idx(0, 0, 0)] = lamp;
     blocks
 }
 
@@ -236,14 +239,6 @@ pub fn gen_mesh<'a>(
                 // left face
                 if blocks.transparent(left_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::LEFT);
-                    // before reversing the order of vertexes, 
-                    // vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v011, t, [0.0, 0.0]));
-                    // after reversing the order of the vertexes
                     vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
@@ -255,14 +250,6 @@ pub fn gen_mesh<'a>(
                 // right face
                 if blocks.transparent(right_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::RIGHT);
-                    // before reversing the order of vertexes,
-                    // vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v111, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
-                    // after reversing the order of the vertexes
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
@@ -274,14 +261,6 @@ pub fn gen_mesh<'a>(
                 // lower face
                 if blocks.transparent(down_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::DOWN);
-                    // before reversing the order of vertexes,
-                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
-                    // after reversing the order of the vertexes
                     vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
@@ -293,14 +272,6 @@ pub fn gen_mesh<'a>(
                 // upper face
                 if blocks.transparent(up_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::UP);
-                    // before reversing the order of vertexes,
-                    // vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v111, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
-                    // after reversing the order of the vertexes
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
@@ -313,14 +284,6 @@ pub fn gen_mesh<'a>(
                 // back face
                 if blocks.transparent(back_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::BACK);
-                    // before reversing the order of vertexes,
-                    // vertexes.push(Vertex3D::new2(v000, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v110, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
-                    // after reversing the order of the vertexes
                     vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v000, t, [0.0, 1.0]));
@@ -333,14 +296,6 @@ pub fn gen_mesh<'a>(
                 // front face
                 if blocks.transparent(front_block_idx) {
                     let t = blocks.get_texture_offset(block_idx, BlockFace::FRONT);
-                    // before reversing the order of vertexes,
-                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
-                    // vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v111, t, [0.0, 0.0]));
-                    // vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
-                    // after reversing the order of the vertexes
                     vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
