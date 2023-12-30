@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use nalgebra::Isometry3;
+use nalgebra::Point3;
 use nalgebra::Vector3;
 
 use rapier3d::geometry::Collider;
@@ -17,9 +18,8 @@ use vulkano::swapchain::Surface;
 
 use crate::camera::InteractiveCamera;
 use crate::game_system::block::BlockDefinitionTable;
-use crate::game_system::camera_manager::CameraManager;
 use crate::game_system::chunk_manager::ChunkManager;
-use crate::game_system::ego_movement_manager::EgoMovementManager;
+use crate::game_system::ego_controls_manager::EgoMovementManager;
 use crate::game_system::manager::Manager;
 use crate::game_system::manager::UpdateData;
 use crate::game_system::physics_manager::PhysicsManager;
@@ -28,13 +28,12 @@ use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
 use crate::render_system::vertex::Vertex3D;
 
-
 pub struct EntityCreationPhysicsData {
     // if true, the object can be moved by the physics engine
     // if false, then the object will not move due to forces.
     pub is_dynamic: bool,
     // If hitbox is specified, it can still be collided with even if is_dynamic is false
-    pub hitbox: Collider, 
+    pub hitbox: Collider,
 }
 
 pub struct EntityCreationData {
@@ -62,6 +61,10 @@ pub enum WorldChange {
         id: u32,
         velocity: Vector3<f32>,
         torque: Vector3<f32>,
+    },
+    BreakBlock {
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
     },
 }
 
@@ -95,7 +98,10 @@ impl GameWorld {
 
         let mut texture_atlas = vec![];
 
-        let block_table = Arc::new(BlockDefinitionTable::load_assets("assets/blocks", &mut texture_atlas));
+        let block_table = Arc::new(BlockDefinitionTable::load_assets(
+            "assets/blocks",
+            &mut texture_atlas,
+        ));
 
         let renderer = interactive_rendering::Renderer::new(
             surface.clone(),
@@ -119,12 +125,9 @@ impl GameWorld {
 
         let camera = Rc::new(RefCell::new(camera));
 
-        let camera_manager = CameraManager::new(camera.clone());
-
-        let ego_movement_manager = EgoMovementManager::new();
+        let ego_movement_manager = EgoMovementManager::new(camera.clone());
 
         let physics_manager = PhysicsManager::new();
-
 
         let chunk_manager = ChunkManager::new(threadpool, 0, block_table);
 
@@ -137,11 +140,10 @@ impl GameWorld {
             surface,
             changes_since_last_step: vec![],
             managers: vec![
-                Box::new(scene_manager),
-                Box::new(camera_manager),
                 Box::new(ego_movement_manager),
                 Box::new(physics_manager),
                 Box::new(chunk_manager),
+                Box::new(scene_manager),
             ],
         }
     }
@@ -154,6 +156,7 @@ impl GameWorld {
                 return id;
             }
         };
+        let extent = interactive_rendering::get_surface_extent(&self.surface);
 
         let mut new_changes = vec![];
         for manager in self.managers.iter_mut() {
@@ -161,6 +164,7 @@ impl GameWorld {
                 entities: &self.entities,
                 ego_entity_id: self.ego_entity_id,
                 reserve_entity_id: &mut reserve_fn,
+                extent,
             };
             // run each manager, and store the changes required
             new_changes.extend(manager.update(data, &self.changes_since_last_step));
@@ -191,6 +195,24 @@ impl GameWorld {
         }
 
         self.changes_since_last_step = new_changes;
+
+        // render to screen
+        let (eye, front, right, up) = self.camera.borrow().eye_front_right_up();
+        let (
+            top_level_acceleration_structure,
+            instance_vertex_buffer_addresses,
+            instance_transforms,
+        ) = self.scene.borrow_mut().get_tlas();
+        // render to screen
+        self.renderer.render(
+            top_level_acceleration_structure,
+            instance_vertex_buffer_addresses,
+            instance_transforms,
+            eye,
+            front,
+            right,
+            up,
+        )
     }
 
     // add a new entity to the world
@@ -211,27 +233,6 @@ impl GameWorld {
         self.entities.remove(&entity_id);
         self.changes_since_last_step
             .push(WorldChange::RemoveEntity(entity_id));
-    }
-
-    /// render to screen (if interactive rendering is enabled)
-    /// Note that all offscreen rendering is done during `step`
-    pub fn render(&mut self) {
-        let (eye, front, right, up) = self.camera.borrow().eye_front_right_up();
-        let (
-            top_level_acceleration_structure,
-            instance_vertex_buffer_addresses,
-            instance_transforms,
-        ) = self.scene.borrow_mut().tlas();
-        // render to screen
-        self.renderer.render(
-            top_level_acceleration_structure,
-            instance_vertex_buffer_addresses,
-            instance_transforms,
-            eye,
-            front,
-            right,
-            up,
-        )
     }
 
     pub fn handle_window_event(&mut self, input: &winit::event::WindowEvent) {

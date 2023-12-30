@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    block::{BlockDefinitionTable, BlockIdx},
+    block::{self, BlockDefinitionTable, BlockIdx},
     chunk::{self, NeighboringChunkData, WorldgenData, CHUNK_X_SIZE, CHUNK_Y_SIZE, CHUNK_Z_SIZE},
     manager::{Manager, UpdateData},
 };
@@ -105,71 +105,41 @@ impl ChunkManager {
         }
     }
 
-    fn neighboring_chunks_have_data(&self, chunk_position: Point3<i32>) -> bool {
-        for position in &[
-            chunk_position + Vector3::new(-1, 0, 0),
-            chunk_position + Vector3::new(1, 0, 0),
-            chunk_position + Vector3::new(0, -1, 0),
-            chunk_position + Vector3::new(0, 1, 0),
-            chunk_position + Vector3::new(0, 0, -1),
-            chunk_position + Vector3::new(0, 0, 1),
-        ] {
-            if let Some(chunk) = self.chunks.get(position) {
-                if chunk.data.is_none() {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-        true
+    fn adjacent_chunk_positions(chunk_coords: Point3<i32>) -> [Point3<i32>; 6] {
+        [
+            chunk_coords + Vector3::new(-1, 0, 0),
+            chunk_coords + Vector3::new(1, 0, 0),
+            chunk_coords + Vector3::new(0, -1, 0),
+            chunk_coords + Vector3::new(0, 1, 0),
+            chunk_coords + Vector3::new(0, 0, -1),
+            chunk_coords + Vector3::new(0, 0, 1),
+        ]
     }
 
-    fn get_neighboring_chunks(&self, chunk_position: Point3<i32>) -> [Arc<Vec<BlockIdx>>; 6] {
-        let left = self
-            .chunks
-            .get(&(chunk_position + Vector3::new(-1, 0, 0)))
-            .unwrap()
-            .data
-            .clone()
-            .unwrap();
-        let right = self
-            .chunks
-            .get(&(chunk_position + Vector3::new(1, 0, 0)))
-            .unwrap()
-            .data
-            .clone()
-            .unwrap();
-        let down = self
-            .chunks
-            .get(&(chunk_position + Vector3::new(0, -1, 0)))
-            .unwrap()
-            .data
-            .clone()
-            .unwrap();
-        let up = self
-            .chunks
-            .get(&(chunk_position + Vector3::new(0, 1, 0)))
-            .unwrap()
-            .data
-            .clone()
-            .unwrap();
-        let back = self
-            .chunks
-            .get(&(chunk_position + Vector3::new(0, 0, -1)))
-            .unwrap()
-            .data
-            .clone()
-            .unwrap();
-        let front = self
-            .chunks
-            .get(&(chunk_position + Vector3::new(0, 0, 1)))
-            .unwrap()
-            .data
-            .clone()
-            .unwrap();
+    fn adjacent_chunks<'a>(&'a self, chunk_coords: Point3<i32>) -> [Option<&'a Chunk>; 6] {
+        let mut out = [None, None, None, None, None, None];
+        for (i, position) in Self::adjacent_chunk_positions(chunk_coords)
+            .iter()
+            .enumerate()
+        {
+            out[i] = self.chunks.get(position);
+        }
+        out
+    }
 
-        [left, right, down, up, back, front]
+    fn adjacent_chunks_have_data(&self, chunk_position: Point3<i32>) -> bool {
+        self.adjacent_chunks(chunk_position)
+            .iter()
+            .all(|x| x.is_some() && x.unwrap().data.is_some())
+    }
+
+    fn unwrap_adjacent_chunks(&self, chunk_coords: Point3<i32>) -> [Arc<Vec<BlockIdx>>; 6] {
+        let adjacent_chunks: Vec<Arc<Vec<BlockIdx>>> = self
+            .adjacent_chunks(chunk_coords)
+            .iter()
+            .map(|x| x.unwrap().data.clone().unwrap())
+            .collect();
+        adjacent_chunks.try_into().unwrap()
     }
 
     fn chunk_should_be_loaded(&self, chunk_position: Point3<i32>) -> bool {
@@ -212,7 +182,7 @@ impl ChunkManager {
                     }
                     _ => false,
                 }
-                && self.neighboring_chunks_have_data(chunk_position);
+                && self.adjacent_chunks_have_data(chunk_position);
 
             // begin asynchronously generating all chunks that need to be generated
             if should_generate_data {
@@ -235,7 +205,7 @@ impl ChunkManager {
                 let mesh_stale_time = chunk.mesh_stale.unwrap();
 
                 let [left, right, down, up, back, front] =
-                    self.get_neighboring_chunks(chunk_position);
+                    self.unwrap_adjacent_chunks(chunk_position);
 
                 self.threadpool.execute(move || {
                     let mesh = chunk::gen_mesh(
@@ -275,15 +245,8 @@ impl ChunkManager {
                         chunk.mesh_stale = Some(Instant::now());
 
                         // mark all neighboring chunks as stale mesh
-                        for position in &[
-                            chunk_position + Vector3::new(-1, 0, 0),
-                            chunk_position + Vector3::new(1, 0, 0),
-                            chunk_position + Vector3::new(0, -1, 0),
-                            chunk_position + Vector3::new(0, 1, 0),
-                            chunk_position + Vector3::new(0, 0, -1),
-                            chunk_position + Vector3::new(0, 0, 1),
-                        ] {
-                            if let Some(chunk) = self.chunks.get_mut(position) {
+                        for position in Self::adjacent_chunk_positions(chunk_position) {
+                            if let Some(chunk) = self.chunks.get_mut(&position) {
                                 chunk.mesh_stale = Some(Instant::now());
                             }
                         }
@@ -334,16 +297,254 @@ impl ChunkManager {
 
         world_changes
     }
+
+    fn get_block(&self, global_coords: Point3<i32>) -> Option<BlockIdx> {
+        let (chunk_coords, block_coords) = chunk::global_to_chunk_coords(global_coords);
+        match self.chunks.get(&chunk_coords) {
+            Some(Chunk {
+                data: Some(ref data),
+                ..
+            }) => Some(data[chunk::chunk_idx2(block_coords)]),
+            _ => None,
+        }
+    }
+
+    fn set_block(&mut self, global_coords: Point3<i32>, block: BlockIdx) {
+        let (chunk_coords, block_coords) = chunk::global_to_chunk_coords(global_coords);
+
+        let old_block = match self.chunks.get_mut(&chunk_coords) {
+            Some(Chunk { data, .. }) => {
+                if let Some(chunk_data) = data {
+                    let mut chunk_data_clone = chunk_data.as_ref().clone();
+                    let old_block = chunk_data_clone[chunk::chunk_idx2(block_coords)];
+                    chunk_data_clone[chunk::chunk_idx2(block_coords)] = block;
+                    *data = Some(Arc::new(chunk_data_clone));
+
+                    Some(old_block)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(_) = old_block {
+            self.chunks.get_mut(&chunk_coords).unwrap().mesh_stale = Some(Instant::now());
+            if block_coords[0] == 0 {
+                if let Some(chunk) = self
+                    .chunks
+                    .get_mut(&(chunk_coords + Vector3::new(-1, 0, 0)))
+                {
+                    chunk.mesh_stale = Some(Instant::now());
+                }
+            }
+            if block_coords[0] == CHUNK_X_SIZE as i32 - 1 {
+                if let Some(chunk) = self.chunks.get_mut(&(chunk_coords + Vector3::new(1, 0, 0))) {
+                    chunk.mesh_stale = Some(Instant::now());
+                }
+            }
+            if block_coords[1] == 0 {
+                if let Some(chunk) = self
+                    .chunks
+                    .get_mut(&(chunk_coords + Vector3::new(0, -1, 0)))
+                {
+                    chunk.mesh_stale = Some(Instant::now());
+                }
+            }
+            if block_coords[1] == CHUNK_Y_SIZE as i32 - 1 {
+                if let Some(chunk) = self.chunks.get_mut(&(chunk_coords + Vector3::new(0, 1, 0))) {
+                    chunk.mesh_stale = Some(Instant::now());
+                }
+            }
+            if block_coords[2] == 0 {
+                if let Some(chunk) = self
+                    .chunks
+                    .get_mut(&(chunk_coords + Vector3::new(0, 0, -1)))
+                {
+                    chunk.mesh_stale = Some(Instant::now());
+                }
+            }
+            if block_coords[2] == CHUNK_Z_SIZE as i32 - 1 {
+                if let Some(chunk) = self.chunks.get_mut(&(chunk_coords + Vector3::new(0, 0, 1))) {
+                    chunk.mesh_stale = Some(Instant::now());
+                }
+            }
+        }
+    }
+
+    // From "A Fast Voxel Traversal Algorithm for Ray Tracing"
+    // by John Amanatides and Andrew Woo, 1987
+    // <http://www.cse.yorku.ca/~amana/research/grid.pdf>
+    // <http://citeseer.ist.psu.edu/viewdoc/summary?doi=10.1.1.42.3443>
+    // Extensions to the described algorithm:
+    //   • Imposed a distance limit.
+    //   • The face passed through to reach the current cube is provided to
+    //     the callback.
+
+    // The foundation of this algorithm is a parameterized representation of
+    // the provided ray,
+    //                    origin + t * direction,
+    // except that t is not actually stored; rather, at any given point in the
+    // traversal, we keep track of the *greater* t values which we would have
+    // if we took a step sufficient to cross a cube boundary along that axis
+    // (i.e. change the integer part of the coordinate) in the variables
+    // tMaxX, tMaxY, and tMaxZ.
+    fn trace_to_solid(
+        &self,
+        origin: &Point3<f32>,
+        direction: &Vector3<f32>,
+    ) -> Option<(Point3<i32>, block::BlockFace)> {
+        // http://gamedev.stackexchange.com/questions/47362/cast-ray-to-select-block-in-voxel-game#comment160436_49423
+        fn intbound(s: f32, ds: f32) -> f32 {
+            if ds < 0.0 && s.floor() == s {
+                return 0.0;
+            }
+
+            let ceils = if s == 0.0 { 1.0 } else { s.ceil() };
+
+            if ds > 0.0 {
+                (ceils - s) / ds
+            } else {
+                (s - s.floor()) / ds.abs()
+            }
+        }
+
+        // Cube containing origin point.
+        let mut x = origin[0].floor() as i32;
+        let mut y = origin[1].floor() as i32;
+        let mut z = origin[2].floor() as i32;
+
+        // Break out direction vector.
+        let step_x = direction[0].signum() as i32;
+        let step_y = direction[1].signum() as i32;
+        let step_z = direction[2].signum() as i32;
+
+        // See description above. The initial values depend on the fractional
+        // part of the origin.
+        let mut t_max_x = intbound(origin[0], direction[0]);
+        let mut t_max_y = intbound(origin[1], direction[1]);
+        let mut t_max_z = intbound(origin[2], direction[2]);
+
+        // The change in t when taking a step (always positive).
+        let t_delta_x = step_x as f32 / direction[0];
+        let t_delta_y = step_y as f32 / direction[1];
+        let t_delta_z = step_z as f32 / direction[2];
+
+        // Rescale from units of 1 cube-edge to units of 'direction' so we can
+        // compare with 't'.
+        let radius = 100.0 / direction.norm();
+
+        // Avoids an infinite loop.
+        // reject if the direction is zero
+        assert!(
+            !(direction[0].abs() < 0.0001
+                && direction[1].abs() < 0.0001
+                && direction[2].abs() < 0.0001)
+        );
+
+        let mut face = block::BlockFace::LEFT;
+        loop {
+            let block = self.get_block(Point3::new(x, y, z));
+            if let Some(block) = block {
+                if !self.worldgen_data.block_definition_table.transparent(block) {
+                    // block is not transparent
+                    break Some((Point3::new(x, y, z), face));
+                }
+            } else {
+                // chunk not loaded
+                break None;
+            }
+
+            // tMaxX stores the t-value at which we cross a cube boundary along the
+            // X axis, and similarly for Y and Z. Therefore, choosing the least tMax
+            // chooses the closest cube boundary. Only the first case of the four
+            // has been commented in detail.
+            if t_max_x < t_max_y {
+                if t_max_x < t_max_z {
+                    if t_max_x > radius {
+                        break None;
+                    }
+                    // Update which cube we are now in.
+                    x += step_x;
+                    // Adjust tMaxX to the next X-oriented boundary crossing.
+                    t_max_x += t_delta_x;
+                    // record the normal vector of the cube face we entered.
+                    face = if step_x == 1 {
+                        block::BlockFace::LEFT
+                    } else {
+                        block::BlockFace::RIGHT
+                    };
+                } else {
+                    if t_max_z > radius {
+                        break None;
+                    }
+                    z += step_z;
+                    t_max_z += t_delta_z;
+                    face = if step_z == 1 {
+                        block::BlockFace::BACK
+                    } else {
+                        block::BlockFace::FRONT
+                    };
+                }
+            } else {
+                if t_max_y < t_max_z {
+                    if t_max_y > radius {
+                        break None;
+                    }
+                    y += step_y;
+                    t_max_y += t_delta_y;
+                    face = if step_y == 1 {
+                        block::BlockFace::UP
+                    } else {
+                        block::BlockFace::DOWN
+                    };
+                } else {
+                    // Identical to the second case, repeated for simplicity in
+                    // the conditionals.
+                    if t_max_z > radius {
+                        break None;
+                    }
+                    z += step_z;
+                    t_max_z += t_delta_z;
+                    face = if step_z == 1 {
+                        block::BlockFace::BACK
+                    } else {
+                        block::BlockFace::FRONT
+                    };
+                }
+            }
+        }
+    }
 }
 
 impl Manager for ChunkManager {
-    fn update<'a>(&mut self, data: UpdateData<'a>, _: &Vec<WorldChange>) -> Vec<WorldChange> {
+    fn update<'a>(&mut self, data: UpdateData<'a>, changes: &Vec<WorldChange>) -> Vec<WorldChange> {
         let UpdateData {
             ego_entity_id,
             entities,
             reserve_entity_id,
             ..
         } = data;
+
+        // process updates
+        for change in changes {
+            match change {
+                WorldChange::BreakBlock { origin, direction } => {
+                    if let Some((block_coords, _)) = self.trace_to_solid(origin, direction) {
+                        dbg!(&block_coords);
+
+                        let air = self
+                            .worldgen_data
+                            .block_definition_table
+                            .block_idx("air")
+                            .unwrap();
+                        self.set_block(block_coords, air);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let ego_location = entities
             .get(&ego_entity_id)
             .unwrap()
@@ -351,14 +552,11 @@ impl Manager for ChunkManager {
             .translation
             .vector;
 
-        let ego_chunk_location = Point3::new(
-            (ego_location[0] / CHUNK_X_SIZE as f32).floor() as i32,
-            (ego_location[1] / CHUNK_Y_SIZE as f32).floor() as i32,
-            (ego_location[2] / CHUNK_Z_SIZE as f32).floor() as i32,
-        );
+        let (ego_chunk_coords, _) =
+            chunk::global_to_chunk_coords(chunk::floor_coords(ego_location.into()));
 
-        if ego_chunk_location != self.center_chunk {
-            self.set_center_chunk(ego_chunk_location);
+        if ego_chunk_coords != self.center_chunk {
+            self.set_center_chunk(ego_chunk_coords);
         }
 
         // update chunks

@@ -15,6 +15,32 @@ pub fn chunk_idx(x: usize, y: usize, z: usize) -> usize {
     CHUNK_Z_SIZE * CHUNK_Y_SIZE * x + CHUNK_Z_SIZE * y + z
 }
 
+pub fn chunk_idx2(p: Point3<i32>) -> usize {
+    chunk_idx(p.x as usize, p.y as usize, p.z as usize)
+}
+
+pub fn floor_coords(coords: Point3<f32>) -> Point3<i32> {
+    Point3::new(coords.x.floor() as i32, coords.y.floor() as i32, coords.z.floor() as i32)
+}
+
+pub fn global_to_chunk_coords(global_coords: Point3<i32>) -> (Point3<i32>, Point3<i32>) {
+    let chunk_coords = Point3::new(
+        (global_coords.x as f32 / CHUNK_X_SIZE as f32).floor() as i32,
+        (global_coords.y as f32 / CHUNK_Y_SIZE as f32).floor() as i32,
+        (global_coords.z as f32 / CHUNK_Z_SIZE as f32).floor() as i32,
+    );
+
+    let block_coords = Point3::new(
+        global_coords[0] - chunk_coords[0] * CHUNK_X_SIZE as i32,
+        global_coords[1] - chunk_coords[1] * CHUNK_Y_SIZE as i32,
+        global_coords[2] - chunk_coords[2] * CHUNK_Z_SIZE as i32,
+    );
+
+    (chunk_coords, block_coords)
+}
+
+
+
 #[derive(Clone)]
 pub struct WorldgenData {
     pub noise: Arc<OpenSimplex>,

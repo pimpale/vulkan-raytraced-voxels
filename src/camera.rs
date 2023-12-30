@@ -1,7 +1,9 @@
 use nalgebra::{
     Matrix, Matrix4, Point, Point2, Point3, Quaternion, UnitQuaternion, Vector2, Vector3,
 };
-use winit::event::ElementState;
+use winit::event::{ElementState, MouseButton};
+
+use crate::utils;
 
 #[inline]
 fn deg2rad(deg: f32) -> f32 {
@@ -44,11 +46,6 @@ pub trait InteractiveCamera: Camera {
     fn handle_event(&mut self, extent: [u32; 2], input: &winit::event::WindowEvent);
 }
 
-fn get_normalized_mouse_coords(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
-    let trackball_radius = extent[0].min(extent[1]) as f32;
-    let center = Vector2::new(extent[0] as f32 / 2.0, extent[1] as f32 / 2.0);
-    return (e - center) / trackball_radius;
-}
 
 // lets you orbit around the central point by clicking and dragging
 pub struct SphericalCamera {
@@ -92,13 +89,6 @@ impl SphericalCamera {
 }
 
 impl Camera for SphericalCamera {
-    // fn mvp(&self, extent: [u32; 2]) -> Matrix4<f32> {
-    //     let dirs = DirVecs::new(self.worldup, self.pitch, self.yaw);
-    //     let projection = gen_perspective_projection(extent);
-    //     let view = Matrix4::look_at_rh(&(self.root_pos - self.offset*(self.root_rot*dirs.front)), &self.root_pos, &self.worldup);
-    //     projection * view
-    // }
-
     // returns eye, front, right, up
     fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>,  Vector3<f32>, Vector3<f32>) {
         let vecs = DirVecs::new(self.worldup, self.pitch, self.yaw);
@@ -128,6 +118,7 @@ impl InteractiveCamera for SphericalCamera {
             // mouse down
             winit::event::WindowEvent::MouseInput {
                 state: ElementState::Pressed,
+                button: MouseButton::Middle,
                 ..
             } => {
                 self.mouse_down = true;
@@ -136,7 +127,7 @@ impl InteractiveCamera for SphericalCamera {
             // cursor move
             winit::event::WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_prev = self.mouse_curr;
-                self.mouse_curr = get_normalized_mouse_coords(
+                self.mouse_curr = utils::get_normalized_mouse_coords(
                     Point2::new(position.x as f32, position.y as f32),
                     extent,
                 );
@@ -155,6 +146,7 @@ impl InteractiveCamera for SphericalCamera {
             // mouse up
             winit::event::WindowEvent::MouseInput {
                 state: ElementState::Released,
+                button: MouseButton::Middle,
                 ..
             } => {
                 self.mouse_down = false;
@@ -164,9 +156,9 @@ impl InteractiveCamera for SphericalCamera {
                 match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => {
                         self.offset -= 0.1*y;
-                        if self.offset < 0.5 {
-                            self.offset = 0.5;
-                        }
+                        //if self.offset < 0.5 {
+                        //    self.offset = 0.5;
+                        //}
                     }
                     winit::event::MouseScrollDelta::PixelDelta(_) => {}
                 }

@@ -208,8 +208,7 @@ fn main() {
             }
 
             // game step and render
-            let observations = world.step();
-            world.render();
+            world.step();
         }
         _ => (),
     });

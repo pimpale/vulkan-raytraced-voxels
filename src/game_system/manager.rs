@@ -6,6 +6,7 @@ pub struct UpdateData<'a> {
     pub entities: &'a HashMap<u32, Entity>,
     pub ego_entity_id: u32,
     pub reserve_entity_id: &'a mut dyn FnMut() -> u32,
+    pub extent: [u32; 2],
 }
 
 pub trait Manager {

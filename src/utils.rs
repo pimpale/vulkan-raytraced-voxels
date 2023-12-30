@@ -1,4 +1,4 @@
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Vector3, Point2, Vector2};
 use rapier3d::geometry::{Collider, ColliderBuilder};
 
 use crate::render_system::vertex::Vertex3D as Vertex;
@@ -151,4 +151,16 @@ pub fn get_aabb_hitbox(obj: &[Vertex]) -> Collider {
     let dims = get_aabb(obj);
     // cuboid uses half-extents, so we divide by 2
     ColliderBuilder::cuboid(dims[0] / 2.0, dims[1] / 2.0, dims[2] / 2.0).build()
+}
+
+pub fn get_normalized_mouse_coords(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
+    let trackball_radius = extent[0].min(extent[1]) as f32;
+    let center = Vector2::new(extent[0] as f32 / 2.0, extent[1] as f32 / 2.0);
+    return (e - center) / trackball_radius;
+}
+
+pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
+    let x = e[0] / extent[0] as f32;
+    let y = e[1] / extent[1] as f32;
+    Point2::new(2.0*x-1.0, 2.0*y-1.0)
 }

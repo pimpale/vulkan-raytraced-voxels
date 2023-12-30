@@ -221,7 +221,7 @@ pub mod fs {
 
             BounceInfo doBounce(IntersectionInfo info, uint seed) {
                 if(info.miss) {
-                    vec3 sky_emittance = vec3(3.0);
+                    vec3 sky_emittance = vec3(5);
                     vec3 sky_reflectance = vec3(0.0);
                     return BounceInfo(
                         sky_emittance,
@@ -260,7 +260,7 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 4;
+            const uint SAMPLES_PER_PIXEL = 32;
             const uint MAX_BOUNCES = 3;
 
             void main() {
