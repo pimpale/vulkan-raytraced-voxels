@@ -1,11 +1,10 @@
 use nalgebra::Point2;
-use winit::event::{ElementState, KeyboardInput, VirtualKeyCode, MouseButton};
+use winit::event::{ElementState, KeyboardInput, MouseButton, VirtualKeyCode};
 
 #[derive(Clone, Debug)]
-pub struct UserInputState {
+pub struct UserInputState1 {
     // mouse state
     pub pos: Point2<f32>,
-    pub ppos: Point2<f32>,
     pub mouse_left_down: bool,
     pub mouse_right_down: bool,
 
@@ -24,11 +23,10 @@ pub struct UserInputState {
     pub shift: bool,
 }
 
-impl UserInputState {
-    pub fn new() -> UserInputState {
-        UserInputState {
+impl Default for UserInputState1 {
+    fn default() -> Self {
+        UserInputState1 {
             pos: Default::default(),
-            ppos: Default::default(),
             mouse_left_down: false,
             mouse_right_down: false,
             w: false,
@@ -39,46 +37,66 @@ impl UserInputState {
             e: false,
             up: false,
             left: false,
-            right: false,
             down: false,
+            right: false,
             space: false,
             shift: false,
         }
     }
-    pub fn handle_input(&mut self, input: &winit::event::WindowEvent) {
-        match input {
-            winit::event::WindowEvent::CursorMoved { position, .. } => {
-                self.ppos = self.pos;
-                self.pos = Point2::new(position.x as f32, position.y as f32);
-            }
-            winit::event::WindowEvent::MouseInput { state, button, .. } => {
-                self.mouse_left_down = (*state == ElementState::Pressed) && (*button == MouseButton::Left);
-                self.mouse_right_down = (*state == ElementState::Pressed) && (*button == MouseButton::Right);
-            }
-            winit::event::WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        virtual_keycode: Some(kc),
-                        state,
-                        ..
-                    },
-                ..
-            } => match kc {
-                VirtualKeyCode::W => self.w = state == &ElementState::Pressed,
-                VirtualKeyCode::A => self.a = state == &ElementState::Pressed,
-                VirtualKeyCode::S => self.s = state == &ElementState::Pressed,
-                VirtualKeyCode::D => self.d = state == &ElementState::Pressed,
-                VirtualKeyCode::Q => self.q = state == &ElementState::Pressed,
-                VirtualKeyCode::E => self.e = state == &ElementState::Pressed,
-                VirtualKeyCode::Up => self.up = state == &ElementState::Pressed,
-                VirtualKeyCode::Left => self.left = state == &ElementState::Pressed,
-                VirtualKeyCode::Down => self.down = state == &ElementState::Pressed,
-                VirtualKeyCode::Right => self.right = state == &ElementState::Pressed,
-                VirtualKeyCode::Space => self.space = state == &ElementState::Pressed,
-                VirtualKeyCode::LShift => self.shift = state == &ElementState::Pressed,
+}
+
+#[derive(Clone, Debug)]
+pub struct UserInputState {
+    pub current: UserInputState1,
+    pub previous: UserInputState1,
+}
+
+impl UserInputState {
+    pub fn new() -> UserInputState {
+        UserInputState {
+            current: Default::default(),
+            previous: Default::default(),
+        }
+    }
+    pub fn handle_input(&mut self, input: &Vec<winit::event::WindowEvent>) {
+        self.previous = self.current.clone();
+        let current = &mut self.current;
+        for input in input {
+            match input {
+                winit::event::WindowEvent::CursorMoved { position, .. } => {
+                    current.pos = Point2::new(position.x as f32, position.y as f32);
+                }
+                winit::event::WindowEvent::MouseInput { state, button, .. } => {
+                    current.mouse_left_down =
+                        (*state == ElementState::Pressed) && (*button == MouseButton::Left);
+                    current.mouse_right_down =
+                        (*state == ElementState::Pressed) && (*button == MouseButton::Right);
+                }
+                winit::event::WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            virtual_keycode: Some(kc),
+                            state,
+                            ..
+                        },
+                    ..
+                } => match kc {
+                    VirtualKeyCode::W => current.w = state == &ElementState::Pressed,
+                    VirtualKeyCode::A => current.a = state == &ElementState::Pressed,
+                    VirtualKeyCode::S => current.s = state == &ElementState::Pressed,
+                    VirtualKeyCode::D => current.d = state == &ElementState::Pressed,
+                    VirtualKeyCode::Q => current.q = state == &ElementState::Pressed,
+                    VirtualKeyCode::E => current.e = state == &ElementState::Pressed,
+                    VirtualKeyCode::Up => current.up = state == &ElementState::Pressed,
+                    VirtualKeyCode::Left => current.left = state == &ElementState::Pressed,
+                    VirtualKeyCode::Down => current.down = state == &ElementState::Pressed,
+                    VirtualKeyCode::Right => current.right = state == &ElementState::Pressed,
+                    VirtualKeyCode::Space => current.space = state == &ElementState::Pressed,
+                    VirtualKeyCode::LShift => current.shift = state == &ElementState::Pressed,
+                    _ => (),
+                },
                 _ => (),
-            },
-            _ => (),
+            }
         }
     }
 }

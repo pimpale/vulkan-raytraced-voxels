@@ -35,17 +35,15 @@ impl DirVecs {
 }
 
 pub trait Camera {
-    fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>,  Vector3<f32>, Vector3<f32>);
-    fn set_position(&mut self, pos: Point3<f32>);
-    fn set_rotation(&mut self, rot: UnitQuaternion<f32>);
+    fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>, Vector3<f32>, Vector3<f32>);
+    fn set_root_position(&mut self, pos: Point3<f32>);
+    fn set_root_rotation(&mut self, rot: UnitQuaternion<f32>);
 }
-
 
 pub trait InteractiveCamera: Camera {
     fn update(&mut self);
-    fn handle_event(&mut self, extent: [u32; 2], input: &winit::event::WindowEvent);
+    fn handle_event(&mut self, extent: [u32; 2], inputs: &Vec<winit::event::WindowEvent>);
 }
-
 
 // lets you orbit around the central point by clicking and dragging
 pub struct SphericalCamera {
@@ -84,26 +82,24 @@ impl SphericalCamera {
             mouse_curr: Default::default(),
         }
     }
-
-
 }
 
 impl Camera for SphericalCamera {
     // returns eye, front, right, up
-    fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>,  Vector3<f32>, Vector3<f32>) {
+    fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>, Vector3<f32>, Vector3<f32>) {
         let vecs = DirVecs::new(self.worldup, self.pitch, self.yaw);
-        let front = self.root_rot*vecs.front;
-        let right = self.root_rot*vecs.right;
-        let up = self.root_rot*vecs.up;
-        let eye = self.root_pos - self.offset*front;
+        let front = self.root_rot * vecs.front;
+        let right = self.root_rot * vecs.right;
+        let up = self.root_rot * vecs.up;
+        let eye = self.root_pos - self.offset * front;
         (eye, front, right, up)
     }
 
-    fn set_position(&mut self, pos: Point3<f32>) {
+    fn set_root_position(&mut self, pos: Point3<f32>) {
         self.root_pos = pos;
     }
 
-    fn set_rotation(&mut self, rot: UnitQuaternion<f32>) {
+    fn set_root_rotation(&mut self, rot: UnitQuaternion<f32>) {
         self.root_rot = rot;
     }
 }
@@ -113,57 +109,59 @@ impl InteractiveCamera for SphericalCamera {
         // do nothing
     }
 
-    fn handle_event(&mut self, extent: [u32; 2], event: &winit::event::WindowEvent) {
-        match event {
-            // mouse down
-            winit::event::WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Middle,
-                ..
-            } => {
-                self.mouse_down = true;
-                self.mouse_start = self.mouse_curr;
-            }
-            // cursor move
-            winit::event::WindowEvent::CursorMoved { position, .. } => {
-                self.mouse_prev = self.mouse_curr;
-                self.mouse_curr = utils::get_normalized_mouse_coords(
-                    Point2::new(position.x as f32, position.y as f32),
-                    extent,
-                );
-                if self.mouse_down {
-                    // current and past
-                    self.yaw -= (self.mouse_curr.x - self.mouse_prev.x) * 2.0;
-                    self.pitch -= (self.mouse_curr.y - self.mouse_prev.y) * 2.0;
+    fn handle_event(&mut self, extent: [u32; 2], event: &Vec<winit::event::WindowEvent>) {
+        for event in event {
+            match event {
+                // mouse down
+                winit::event::WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Middle,
+                    ..
+                } => {
+                    self.mouse_down = true;
+                    self.mouse_start = self.mouse_curr;
+                }
+                // cursor move
+                winit::event::WindowEvent::CursorMoved { position, .. } => {
+                    self.mouse_prev = self.mouse_curr;
+                    self.mouse_curr = utils::get_normalized_mouse_coords(
+                        Point2::new(position.x as f32, position.y as f32),
+                        extent,
+                    );
+                    if self.mouse_down {
+                        // current and past
+                        self.yaw -= (self.mouse_curr.x - self.mouse_prev.x) * 2.0;
+                        self.pitch -= (self.mouse_curr.y - self.mouse_prev.y) * 2.0;
 
-                    if self.pitch > deg2rad(89.0) {
-                        self.pitch = deg2rad(89.0);
-                    } else if self.pitch < -deg2rad(89.0) {
-                        self.pitch = -deg2rad(89.0);
+                        if self.pitch > deg2rad(89.0) {
+                            self.pitch = deg2rad(89.0);
+                        } else if self.pitch < -deg2rad(89.0) {
+                            self.pitch = -deg2rad(89.0);
+                        }
                     }
                 }
-            }
-            // mouse up
-            winit::event::WindowEvent::MouseInput {
-                state: ElementState::Released,
-                button: MouseButton::Middle,
-                ..
-            } => {
-                self.mouse_down = false;
-            }
-            // scroll
-            winit::event::WindowEvent::MouseWheel { delta, .. } => {
-                match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                        self.offset -= 0.1*y;
-                        //if self.offset < 0.5 {
-                        //    self.offset = 0.5;
-                        //}
-                    }
-                    winit::event::MouseScrollDelta::PixelDelta(_) => {}
+                // mouse up
+                winit::event::WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Middle,
+                    ..
+                } => {
+                    self.mouse_down = false;
                 }
+                // scroll
+                winit::event::WindowEvent::MouseWheel { delta, .. } => {
+                    match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                            self.offset -= 0.1 * y;
+                            //if self.offset < 0.5 {
+                            //    self.offset = 0.5;
+                            //}
+                        }
+                        winit::event::MouseScrollDelta::PixelDelta(_) => {}
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 }

@@ -247,7 +247,7 @@ pub mod fs {
                 float new_direction_probability = 1.0 / (2.0 * M_PI);
 
                 vec3 reflectance = texture(nonuniformEXT(sampler2D(tex[info.t], s)), info.uv).rgb / M_PI;
-                vec3 emittance = vec3(50.0*float(reflectance.r > 0.2));
+                vec3 emittance = vec3(10.0*float(reflectance.r > 0.2));
 
                 // compute data for this bounce
                 return BounceInfo(

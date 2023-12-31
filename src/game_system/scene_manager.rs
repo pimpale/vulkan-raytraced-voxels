@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    entity::WorldChange,
+    game_system::game_world::WorldChange,
     render_system::{scene::Scene, vertex::Vertex3D},
 };
 
@@ -21,11 +21,10 @@ impl Manager for SceneManager {
     // do nothing
     fn update<'a>(
         &mut self,
-        _: UpdateData<'a>,
-        since_last_frame: &Vec<WorldChange>,
+        data: UpdateData<'a>,
     ) -> Vec<WorldChange> {
         let mut scene = self.scene.borrow_mut();
-        for world_change in since_last_frame.iter() {
+        for world_change in data.world_changes.iter() {
             match world_change {
                 WorldChange::AddEntity(entity_id, entity_creation_data) => {
                     scene.add_object(

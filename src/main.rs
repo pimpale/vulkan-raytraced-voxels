@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use entity::{EntityCreationData, EntityCreationPhysicsData, GameWorld};
+use game_system::game_world::{EntityCreationData, EntityCreationPhysicsData, GameWorld};
 use nalgebra::{Isometry3, Vector3};
 use rapier3d::geometry::ColliderBuilder;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -17,7 +17,6 @@ use winit::event::{Event, WindowEvent};
 use winit::window::WindowBuilder;
 
 mod camera;
-mod entity;
 mod game_system;
 mod handle_user_input;
 mod render_system;
@@ -195,7 +194,7 @@ fn main() {
             *control_flow = ControlFlow::Exit;
         }
         Event::WindowEvent { event, .. } => {
-            world.handle_window_event(&event);
+            world.handle_window_event(event);
         }
         Event::RedrawEventsCleared => {
             // print fps

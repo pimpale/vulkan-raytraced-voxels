@@ -476,6 +476,7 @@ impl Renderer {
 
     pub fn render(
         &mut self,
+        build_future: Box<dyn GpuFuture>,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
         instance_vertex_buffer_addresses: Subbuffer<[u64]>,
         instance_transforms: Subbuffer<[[[f32; 4]; 4]]>,
@@ -586,6 +587,7 @@ impl Renderer {
             .previous_frame_end
             .take()
             .unwrap()
+            .join(build_future)
             .join(acquire_future)
             .then_execute(self.queue.clone(), command_buffer)
             .unwrap()

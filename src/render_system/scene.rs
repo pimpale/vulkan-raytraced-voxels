@@ -43,7 +43,7 @@ pub struct Scene<K, Vertex> {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: BTreeMap<K, Option<Object<Vertex>>>,
-    old_objects: BTreeMap<K, Object<Vertex>>,
+    old_objects: Vec<Object<Vertex>>,
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
     cached_instance_vertex_buffer_addresses: Option<Subbuffer<[u64]>>,
@@ -82,7 +82,7 @@ where
             command_buffer_allocator,
             memory_allocator,
             objects: BTreeMap::new(),
-            old_objects: BTreeMap::new(),
+            old_objects: vec![],
             cached_tlas: None,
             cached_instance_vertex_buffer_addresses: None,
             cached_instance_transforms: None,
@@ -141,19 +141,25 @@ where
     pub fn remove_object(&mut self, key: K) {
         let removed = self.objects.remove(&key);
         if let Some(removed) = removed.flatten() {
-            self.old_objects.insert(key, removed);
+            self.old_objects.push(removed);
             self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
         }
     }
 
+    // SAFETY: after calling this function, any TLAS previously returned by get_tlas() is invalid, and must not in use
+    pub unsafe fn dispose_old_objects(&mut self) {
+        // clear old objects
+        self.old_objects.clear();
+    }
+
     // the returned TLAS may only be used after the returned future has been waited on
-    // it becomes invalid after a subsequent call to get_tlas
     pub fn get_tlas(
         &mut self,
     ) -> (
         Arc<AccelerationStructure>,
         Subbuffer<[u64]>,
         Subbuffer<[[[f32; 4]; 4]]>,
+        Box<dyn GpuFuture>,
     ) {
         // need to update instance vertex buffer addresses if an object was added or removed
         if self.cached_tlas_state == TopLevelAccelerationStructureState::NeedsRebuild {
@@ -182,53 +188,8 @@ where
             );
         }
 
+        // rebuild the instance transforms buffer if any object was moved, added, or removed
         if self.cached_tlas_state != TopLevelAccelerationStructureState::UpToDate {
-            // swap command buffers
-            let blas_command_buffer = std::mem::replace(
-                &mut self.blas_command_buffer,
-                AutoCommandBufferBuilder::primary(
-                    self.command_buffer_allocator.as_ref(),
-                    self.general_queue.queue_family_index(),
-                    CommandBufferUsage::OneTimeSubmit,
-                )
-                .unwrap(),
-            );
-
-            let blas_build_future = blas_command_buffer
-                .build()
-                .unwrap()
-                .execute(self.general_queue.clone())
-                .unwrap();
-
-            let mut tlas_command_buffer = AutoCommandBufferBuilder::primary(
-                self.command_buffer_allocator.as_ref(),
-                self.general_queue.queue_family_index(),
-                CommandBufferUsage::OneTimeSubmit,
-            )
-            .unwrap();
-
-            // initialize tlas build
-            let tlas = create_top_level_acceleration_structure(
-                &mut tlas_command_buffer,
-                self.memory_allocator.clone(),
-                &self
-                    .objects
-                    .values()
-                    .flatten()
-                    .map(|Object { blas, .. }| blas as &AccelerationStructure)
-                    .collect::<Vec<_>>(),
-            );
-
-            // actually submit acceleration structure build future
-            let tlas_build_future = tlas_command_buffer
-                .build()
-                .unwrap()
-                .execute_after(blas_build_future, self.general_queue.clone())
-                .unwrap()
-                .then_signal_fence_and_flush()
-                .unwrap();
-
-            // in the meanwhile, copy the instance transforms
             let instance_transforms = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
@@ -249,19 +210,67 @@ where
                     .collect::<Vec<_>>(),
             )
             .unwrap();
-
-            tlas_build_future.wait(None).unwrap();
-
-            // update state
-            self.cached_tlas = Some(tlas);
             self.cached_instance_transforms = Some(instance_transforms);
         }
 
+        let future = match self.cached_tlas_state {
+            TopLevelAccelerationStructureState::UpToDate => {
+                vulkano::sync::now(self.general_queue.device().clone()).boxed()
+            }
+            _ => {
+                // swap command buffers
+                let blas_command_buffer = std::mem::replace(
+                    &mut self.blas_command_buffer,
+                    AutoCommandBufferBuilder::primary(
+                        self.command_buffer_allocator.as_ref(),
+                        self.general_queue.queue_family_index(),
+                        CommandBufferUsage::OneTimeSubmit,
+                    )
+                    .unwrap(),
+                );
+
+                let blas_build_future = blas_command_buffer
+                    .build()
+                    .unwrap()
+                    .execute(self.general_queue.clone())
+                    .unwrap();
+
+                let mut tlas_command_buffer = AutoCommandBufferBuilder::primary(
+                    self.command_buffer_allocator.as_ref(),
+                    self.general_queue.queue_family_index(),
+                    CommandBufferUsage::OneTimeSubmit,
+                )
+                .unwrap();
+
+                // initialize tlas build
+                let tlas = create_top_level_acceleration_structure(
+                    &mut tlas_command_buffer,
+                    self.memory_allocator.clone(),
+                    &self
+                        .objects
+                        .values()
+                        .flatten()
+                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
+                        .collect::<Vec<_>>(),
+                );
+
+                // actually submit acceleration structure build future
+                let tlas_build_future = tlas_command_buffer
+                    .build()
+                    .unwrap()
+                    .execute_after(blas_build_future, self.general_queue.clone())
+                    .unwrap();
+
+                // update state
+                self.cached_tlas = Some(tlas);
+
+                // return the future
+                tlas_build_future.boxed()
+            }
+        };
+
         // at this point the tlas is up to date
         self.cached_tlas_state = TopLevelAccelerationStructureState::UpToDate;
-
-        // clear old objects
-        self.old_objects = BTreeMap::new();
 
         // return the tlas
         return (
@@ -270,6 +279,7 @@ where
                 .clone()
                 .unwrap(),
             self.cached_instance_transforms.clone().unwrap(),
+            future,
         );
     }
 }

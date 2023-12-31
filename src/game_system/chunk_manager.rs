@@ -14,20 +14,20 @@ use rapier3d::geometry::Collider;
 use threadpool::ThreadPool;
 
 use crate::{
-    entity::{EntityCreationData, EntityCreationPhysicsData, WorldChange},
+    game_system::game_world::{EntityCreationData, EntityCreationPhysicsData, WorldChange},
     render_system::vertex::Vertex3D,
 };
 
 use super::{
-    block::{self, BlockDefinitionTable, BlockIdx},
+    block::{self, BlockDefinitionTable, BlockFace, BlockIdx},
     chunk::{self, NeighboringChunkData, WorldgenData, CHUNK_X_SIZE, CHUNK_Y_SIZE, CHUNK_Z_SIZE},
     manager::{Manager, UpdateData},
 };
 
 // if a chunk is within this boundary it will start to render
-const MIN_RENDER_RADIUS_X: i32 = 5;
-const MIN_RENDER_RADIUS_Y: i32 = 5;
-const MIN_RENDER_RADIUS_Z: i32 = 5;
+const MIN_RENDER_RADIUS_X: i32 = 6;
+const MIN_RENDER_RADIUS_Y: i32 = 6;
+const MIN_RENDER_RADIUS_Z: i32 = 6;
 
 // if a chunk is within this boundary it will stop rendering
 const MAX_RENDER_RADIUS_X: i32 = 8;
@@ -36,12 +36,16 @@ const MAX_RENDER_RADIUS_Z: i32 = 8;
 
 struct Chunk {
     data: Option<Arc<Vec<BlockIdx>>>,
-    data_generating: bool,
-    // the instant at which the mesh became stale
-    mesh_stale: Option<Instant>,
-    // the instant at which the mesh started generating
-    mesh_generating: Option<Instant>,
+    // the instant at which the data started generating
+    data_started_generating: Option<Instant>,
+    // the instant at which data was set
+    data_set_at: Option<Instant>,
+    // the entity id of the mesh
     entity_id: Option<u32>,
+    // the instant at which the mesh started generating
+    mesh_started_generating: Option<Instant>,
+    // the instant at which the mesh was set inside the scene
+    mesh_set_at: Option<Instant>,
 }
 
 enum ChunkWorkerEvent {
@@ -95,10 +99,11 @@ impl ChunkManager {
                         ))
                         .or_insert(Chunk {
                             data: None,
-                            data_generating: false,
-                            mesh_stale: None,
-                            mesh_generating: None,
+                            data_started_generating: None,
+                            data_set_at: None,
                             entity_id: None,
+                            mesh_started_generating: None,
+                            mesh_set_at: None,
                         });
                 }
             }
@@ -169,16 +174,18 @@ impl ChunkManager {
 
             let chunk = self.chunks.get(&chunk_position).unwrap();
 
-            let should_generate_data = match (&chunk.data, chunk.data_generating) {
-                (None, false) => true,
+            let should_generate_data = match (&chunk.data, chunk.data_started_generating) {
+                (None, None) => true,
                 _ => false,
             };
 
             let should_mesh = chunk.data.is_some()
-                && match (chunk.mesh_stale, chunk.mesh_generating) {
+                && match (chunk.data_set_at, chunk.mesh_started_generating) {
                     (Some(_), None) => true,
-                    (Some(mesh_became_stale), Some(mesh_started_generating)) => {
-                        mesh_became_stale > mesh_started_generating
+                    (Some(data_set_at), Some(mesh_started_generating))
+                        if data_set_at > mesh_started_generating =>
+                    {
+                        true
                     }
                     _ => false,
                 }
@@ -194,7 +201,7 @@ impl ChunkManager {
                         .send(ChunkWorkerEvent::ChunkGenerated(chunk_position, chunk_data));
                 });
                 let chunk = self.chunks.get_mut(&chunk_position).unwrap();
-                chunk.data_generating = true;
+                chunk.data_started_generating = Some(Instant::now());
             }
 
             if should_mesh {
@@ -202,7 +209,7 @@ impl ChunkManager {
                 let event_sender = self.event_sender.clone();
                 let chunk = self.chunks.get(&chunk_position).unwrap();
                 let data = chunk.data.clone().unwrap();
-                let mesh_stale_time = chunk.mesh_stale.unwrap();
+                let data_set_time = chunk.data_set_at.unwrap();
 
                 let [left, right, down, up, back, front] =
                     self.unwrap_adjacent_chunks(chunk_position);
@@ -221,17 +228,17 @@ impl ChunkManager {
                         },
                     );
 
-                    //let hitbox = chunk::gen_hitbox(&block_table, &data);
-                    let hitbox = None;
+                    let hitbox = chunk::gen_hitbox(&block_table, &data);
+                    // let hitbox = None;
                     let _ = event_sender.send(ChunkWorkerEvent::ChunkMeshed(
                         chunk_position,
-                        mesh_stale_time,
+                        data_set_time,
                         mesh,
                         hitbox,
                     ));
                 });
                 let chunk = self.chunks.get_mut(&chunk_position).unwrap();
-                chunk.mesh_generating = Some(Instant::now());
+                chunk.mesh_started_generating = Some(Instant::now());
             }
         }
 
@@ -241,39 +248,36 @@ impl ChunkManager {
                 ChunkWorkerEvent::ChunkGenerated(chunk_position, chunk_data) => {
                     if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
                         chunk.data = Some(Arc::new(chunk_data));
-                        chunk.data_generating = false;
-                        chunk.mesh_stale = Some(Instant::now());
-
-                        // mark all neighboring chunks as stale mesh
-                        for position in Self::adjacent_chunk_positions(chunk_position) {
-                            if let Some(chunk) = self.chunks.get_mut(&position) {
-                                chunk.mesh_stale = Some(Instant::now());
-                            }
-                        }
+                        chunk.data_set_at = Some(Instant::now());
                     }
                 }
-                ChunkWorkerEvent::ChunkMeshed(chunk_position, became_stale_at, mesh, hitbox) => {
-                    if let Some(chunk) = self.chunks.get_mut(&chunk_position) {
-                        if chunk.mesh_stale.unwrap() > became_stale_at {
+                ChunkWorkerEvent::ChunkMeshed(chunk_position, mesh_data_set_at, mesh, hitbox) => {
+                    if let Some(Chunk {
+                        data_set_at: Some(chunk_data_set_at),
+                        entity_id,
+                        ..
+                    }) = self.chunks.get_mut(&chunk_position)
+                    {
+                        // chunk data set at could be newer than mesh data set at, if the chunk was
+                        // modified while the mesh was being generated
+                        if &*chunk_data_set_at > &mesh_data_set_at {
                             // this mesh is stale, ignore it
                             continue;
                         }
-                        chunk.mesh_stale = None;
-                        chunk.mesh_generating = None;
 
                         // get the new entity id
                         // if the chunk already has an entity id, remove it
-                        let entity_id = if let Some(entity_id) = chunk.entity_id {
-                            world_changes.push(WorldChange::RemoveEntity(entity_id));
-                            entity_id
+                        let new_entity_id = if let Some(entity_id) = entity_id {
+                            world_changes.push(WorldChange::RemoveEntity(*entity_id));
+                            *entity_id
                         } else {
                             reserve_entity_id()
                         };
 
-                        chunk.entity_id = Some(entity_id);
+                        *entity_id = Some(new_entity_id);
 
                         world_changes.push(WorldChange::AddEntity(
-                            entity_id,
+                            new_entity_id,
                             EntityCreationData {
                                 mesh,
                                 isometry: Isometry3::translation(
@@ -329,18 +333,18 @@ impl ChunkManager {
         };
 
         if let Some(_) = old_block {
-            self.chunks.get_mut(&chunk_coords).unwrap().mesh_stale = Some(Instant::now());
+            self.chunks.get_mut(&chunk_coords).unwrap().data_set_at = Some(Instant::now());
             if block_coords[0] == 0 {
                 if let Some(chunk) = self
                     .chunks
                     .get_mut(&(chunk_coords + Vector3::new(-1, 0, 0)))
                 {
-                    chunk.mesh_stale = Some(Instant::now());
+                    chunk.data_set_at = Some(Instant::now());
                 }
             }
             if block_coords[0] == CHUNK_X_SIZE as i32 - 1 {
                 if let Some(chunk) = self.chunks.get_mut(&(chunk_coords + Vector3::new(1, 0, 0))) {
-                    chunk.mesh_stale = Some(Instant::now());
+                    chunk.data_set_at = Some(Instant::now());
                 }
             }
             if block_coords[1] == 0 {
@@ -348,12 +352,12 @@ impl ChunkManager {
                     .chunks
                     .get_mut(&(chunk_coords + Vector3::new(0, -1, 0)))
                 {
-                    chunk.mesh_stale = Some(Instant::now());
+                    chunk.data_set_at = Some(Instant::now());
                 }
             }
             if block_coords[1] == CHUNK_Y_SIZE as i32 - 1 {
                 if let Some(chunk) = self.chunks.get_mut(&(chunk_coords + Vector3::new(0, 1, 0))) {
-                    chunk.mesh_stale = Some(Instant::now());
+                    chunk.data_set_at = Some(Instant::now());
                 }
             }
             if block_coords[2] == 0 {
@@ -361,184 +365,109 @@ impl ChunkManager {
                     .chunks
                     .get_mut(&(chunk_coords + Vector3::new(0, 0, -1)))
                 {
-                    chunk.mesh_stale = Some(Instant::now());
+                    chunk.data_set_at = Some(Instant::now());
                 }
             }
             if block_coords[2] == CHUNK_Z_SIZE as i32 - 1 {
                 if let Some(chunk) = self.chunks.get_mut(&(chunk_coords + Vector3::new(0, 0, 1))) {
-                    chunk.mesh_stale = Some(Instant::now());
+                    chunk.data_set_at = Some(Instant::now());
                 }
             }
         }
     }
 
-    // From "A Fast Voxel Traversal Algorithm for Ray Tracing"
-    // by John Amanatides and Andrew Woo, 1987
-    // <http://www.cse.yorku.ca/~amana/research/grid.pdf>
-    // <http://citeseer.ist.psu.edu/viewdoc/summary?doi=10.1.1.42.3443>
-    // Extensions to the described algorithm:
-    //   • Imposed a distance limit.
-    //   • The face passed through to reach the current cube is provided to
-    //     the callback.
-
-    // The foundation of this algorithm is a parameterized representation of
-    // the provided ray,
-    //                    origin + t * direction,
-    // except that t is not actually stored; rather, at any given point in the
-    // traversal, we keep track of the *greater* t values which we would have
-    // if we took a step sufficient to cross a cube boundary along that axis
-    // (i.e. change the integer part of the coordinate) in the variables
-    // tMaxX, tMaxY, and tMaxZ.
     fn trace_to_solid(
         &self,
         origin: &Point3<f32>,
         direction: &Vector3<f32>,
-    ) -> Option<(Point3<i32>, block::BlockFace)> {
-        // http://gamedev.stackexchange.com/questions/47362/cast-ray-to-select-block-in-voxel-game#comment160436_49423
-        fn intbound(s: f32, ds: f32) -> f32 {
-            if ds < 0.0 && s.floor() == s {
-                return 0.0;
-            }
+    ) -> Option<(Point3<i32>, BlockFace)> {
+        let radius = 8.0;
+        let step = 0.1;
 
-            let ceils = if s == 0.0 { 1.0 } else { s.ceil() };
+        let direction = direction.normalize() * step;
 
-            if ds > 0.0 {
-                (ceils - s) / ds
-            } else {
-                (s - s.floor()) / ds.abs()
-            }
-        }
-
-        // Cube containing origin point.
-        let mut x = origin[0].floor() as i32;
-        let mut y = origin[1].floor() as i32;
-        let mut z = origin[2].floor() as i32;
-
-        // Break out direction vector.
-        let step_x = direction[0].signum() as i32;
-        let step_y = direction[1].signum() as i32;
-        let step_z = direction[2].signum() as i32;
-
-        // See description above. The initial values depend on the fractional
-        // part of the origin.
-        let mut t_max_x = intbound(origin[0], direction[0]);
-        let mut t_max_y = intbound(origin[1], direction[1]);
-        let mut t_max_z = intbound(origin[2], direction[2]);
-
-        // The change in t when taking a step (always positive).
-        let t_delta_x = step_x as f32 / direction[0];
-        let t_delta_y = step_y as f32 / direction[1];
-        let t_delta_z = step_z as f32 / direction[2];
-
-        // Rescale from units of 1 cube-edge to units of 'direction' so we can
-        // compare with 't'.
-        let radius = 100.0 / direction.norm();
-
-        // Avoids an infinite loop.
-        // reject if the direction is zero
-        assert!(
-            !(direction[0].abs() < 0.0001
-                && direction[1].abs() < 0.0001
-                && direction[2].abs() < 0.0001)
-        );
-
-        let mut face = block::BlockFace::LEFT;
+        let mut loc = origin.clone();
+        let mut loc_quantized = chunk::floor_coords(loc.into());
         loop {
-            let block = self.get_block(Point3::new(x, y, z));
+            while loc_quantized == chunk::floor_coords(loc.into()) {
+                loc += direction;
+                if (loc - origin).norm_squared() > radius * radius {
+                    return None;
+                }
+            }
+            loc_quantized = chunk::floor_coords(loc.into());
+
+            let block = self.get_block(loc_quantized);
             if let Some(block) = block {
                 if !self.worldgen_data.block_definition_table.transparent(block) {
-                    // block is not transparent
-                    break Some((Point3::new(x, y, z), face));
-                }
-            } else {
-                // chunk not loaded
-                break None;
-            }
+                    let last_loc_quantized = chunk::floor_coords((loc - direction).into());
+                    let delta = loc_quantized - last_loc_quantized;
+                    let face = if delta[0] == -1 {
+                        BlockFace::RIGHT
+                    } else if delta[0] == 1 {
+                        BlockFace::LEFT
+                    } else if delta[1] == -1 {
+                        BlockFace::UP
+                    } else if delta[1] == 1 {
+                        BlockFace::DOWN
+                    } else if delta[2] == -1 {
+                        BlockFace::FRONT
+                    } else if delta[2] == 1 {
+                        BlockFace::BACK
+                    } else {
+                        unreachable!()
+                    };
 
-            // tMaxX stores the t-value at which we cross a cube boundary along the
-            // X axis, and similarly for Y and Z. Therefore, choosing the least tMax
-            // chooses the closest cube boundary. Only the first case of the four
-            // has been commented in detail.
-            if t_max_x < t_max_y {
-                if t_max_x < t_max_z {
-                    if t_max_x > radius {
-                        break None;
-                    }
-                    // Update which cube we are now in.
-                    x += step_x;
-                    // Adjust tMaxX to the next X-oriented boundary crossing.
-                    t_max_x += t_delta_x;
-                    // record the normal vector of the cube face we entered.
-                    face = if step_x == 1 {
-                        block::BlockFace::LEFT
-                    } else {
-                        block::BlockFace::RIGHT
-                    };
-                } else {
-                    if t_max_z > radius {
-                        break None;
-                    }
-                    z += step_z;
-                    t_max_z += t_delta_z;
-                    face = if step_z == 1 {
-                        block::BlockFace::BACK
-                    } else {
-                        block::BlockFace::FRONT
-                    };
+                    return Some((loc_quantized, face));
                 }
             } else {
-                if t_max_y < t_max_z {
-                    if t_max_y > radius {
-                        break None;
-                    }
-                    y += step_y;
-                    t_max_y += t_delta_y;
-                    face = if step_y == 1 {
-                        block::BlockFace::UP
-                    } else {
-                        block::BlockFace::DOWN
-                    };
-                } else {
-                    // Identical to the second case, repeated for simplicity in
-                    // the conditionals.
-                    if t_max_z > radius {
-                        break None;
-                    }
-                    z += step_z;
-                    t_max_z += t_delta_z;
-                    face = if step_z == 1 {
-                        block::BlockFace::BACK
-                    } else {
-                        block::BlockFace::FRONT
-                    };
-                }
+                // no longer in loaded chunk
+                return None;
             }
         }
     }
 }
 
 impl Manager for ChunkManager {
-    fn update<'a>(&mut self, data: UpdateData<'a>, changes: &Vec<WorldChange>) -> Vec<WorldChange> {
+    fn update<'a>(&mut self, data: UpdateData<'a>) -> Vec<WorldChange> {
         let UpdateData {
             ego_entity_id,
             entities,
             reserve_entity_id,
+            world_changes,
             ..
         } = data;
 
         // process updates
-        for change in changes {
+        for change in world_changes {
             match change {
                 WorldChange::BreakBlock { origin, direction } => {
                     if let Some((block_coords, _)) = self.trace_to_solid(origin, direction) {
-                        dbg!(&block_coords);
-
                         let air = self
                             .worldgen_data
                             .block_definition_table
                             .block_idx("air")
                             .unwrap();
                         self.set_block(block_coords, air);
+                    }
+                }
+                WorldChange::AddBlock {
+                    origin,
+                    direction,
+                    block_id,
+                } => {
+                    if let Some((block_coords, face)) = self.trace_to_solid(origin, direction) {
+                        dbg!(face);
+                        let block_coords = block_coords
+                            + match face {
+                                BlockFace::LEFT => Vector3::new(-1, 0, 0),
+                                BlockFace::RIGHT => Vector3::new(1, 0, 0),
+                                BlockFace::DOWN => Vector3::new(0, -1, 0),
+                                BlockFace::UP => Vector3::new(0, 1, 0),
+                                BlockFace::BACK => Vector3::new(0, 0, -1),
+                                BlockFace::FRONT => Vector3::new(0, 0, 1),
+                            };
+                        self.set_block(block_coords, *block_id);
                     }
                 }
                 _ => {}

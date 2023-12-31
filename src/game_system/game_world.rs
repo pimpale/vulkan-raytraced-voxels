@@ -18,6 +18,7 @@ use vulkano::swapchain::Surface;
 
 use crate::camera::InteractiveCamera;
 use crate::game_system::block::BlockDefinitionTable;
+use crate::game_system::block::BlockIdx;
 use crate::game_system::chunk_manager::ChunkManager;
 use crate::game_system::ego_controls_manager::EgoMovementManager;
 use crate::game_system::manager::Manager;
@@ -66,6 +67,11 @@ pub enum WorldChange {
         origin: Point3<f32>,
         direction: Vector3<f32>,
     },
+    AddBlock {
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        block_id: BlockIdx,
+    },
 }
 
 pub struct GameWorld {
@@ -77,6 +83,7 @@ pub struct GameWorld {
     renderer: interactive_rendering::Renderer,
 
     // manager data
+    events_since_last_step: Vec<winit::event::WindowEvent<'static>>,
     changes_since_last_step: Vec<WorldChange>,
     managers: Vec<Box<dyn Manager>>,
 }
@@ -138,6 +145,7 @@ impl GameWorld {
             ego_entity_id,
             renderer,
             surface,
+            events_since_last_step: vec![],
             changes_since_last_step: vec![],
             managers: vec![
                 Box::new(ego_movement_manager),
@@ -148,30 +156,18 @@ impl GameWorld {
         }
     }
 
-    pub fn step(&mut self) {
+    fn get_reserve_closure<'a>(entities: &'a HashMap<u32, Entity>) -> impl FnMut() -> u32 + 'a {
         let reserved_ids = vec![];
-        let mut reserve_fn = || loop {
+        move || loop {
             let id = rand::random::<u32>();
-            if !self.entities.contains_key(&id) && !reserved_ids.contains(&id) {
+            if !entities.contains_key(&id) && !reserved_ids.contains(&id) {
                 return id;
             }
-        };
-        let extent = interactive_rendering::get_surface_extent(&self.surface);
-
-        let mut new_changes = vec![];
-        for manager in self.managers.iter_mut() {
-            let data = UpdateData {
-                entities: &self.entities,
-                ego_entity_id: self.ego_entity_id,
-                reserve_entity_id: &mut reserve_fn,
-                extent,
-            };
-            // run each manager, and store the changes required
-            new_changes.extend(manager.update(data, &self.changes_since_last_step));
         }
+    }
 
-        // update entity table
-        for change in &new_changes {
+    pub fn update_entity_table(&mut self, changes: &Vec<WorldChange>) {
+        for change in changes {
             match change {
                 WorldChange::AddEntity(entity_id, entity_creation_data) => {
                     self.entities.insert(
@@ -183,17 +179,44 @@ impl GameWorld {
                     );
                 }
                 WorldChange::RemoveEntity(entity_id) => {
-                    self.entities.remove(entity_id);
+                    self.entities.remove(&entity_id);
                 }
                 WorldChange::UpdateEntityIsometry(entity_id, isometry) => {
-                    if let Some(entity) = self.entities.get_mut(entity_id) {
+                    if let Some(entity) = self.entities.get_mut(&entity_id) {
                         entity.isometry = isometry.clone();
                     }
                 }
                 _ => {}
             }
         }
+    }
 
+    pub fn step(&mut self) {
+        let new_changes = {
+            let extent = interactive_rendering::get_surface_extent(&self.surface);
+            let mut reserve_fn = Self::get_reserve_closure(&self.entities);
+
+            let mut new_changes = vec![];
+            for manager in self.managers.iter_mut() {
+                let data = UpdateData {
+                    entities: &self.entities,
+                    window_events: &self.events_since_last_step,
+                    world_changes: &self.changes_since_last_step,
+                    ego_entity_id: self.ego_entity_id,
+                    extent,
+                    reserve_entity_id: &mut reserve_fn,
+                };
+                // run each manager, and store the changes required
+                new_changes.extend(manager.update(data));
+            }
+            new_changes
+        };
+
+        // clear window events
+        self.events_since_last_step.clear();
+
+        // update entity table
+        self.update_entity_table(&new_changes);
         self.changes_since_last_step = new_changes;
 
         // render to screen
@@ -202,9 +225,11 @@ impl GameWorld {
             top_level_acceleration_structure,
             instance_vertex_buffer_addresses,
             instance_transforms,
+            build_future,
         ) = self.scene.borrow_mut().get_tlas();
         // render to screen
         self.renderer.render(
+            build_future,
             top_level_acceleration_structure,
             instance_vertex_buffer_addresses,
             instance_transforms,
@@ -212,7 +237,13 @@ impl GameWorld {
             front,
             right,
             up,
-        )
+        );
+
+        // at this point we can now garbage collect the removed entities from the scene
+        // this is because the renderer will block until the last frame has finished executing
+        unsafe {
+            self.scene.borrow_mut().dispose_old_objects();
+        }
     }
 
     // add a new entity to the world
@@ -235,10 +266,9 @@ impl GameWorld {
             .push(WorldChange::RemoveEntity(entity_id));
     }
 
-    pub fn handle_window_event(&mut self, input: &winit::event::WindowEvent) {
-        let extent = interactive_rendering::get_surface_extent(&self.surface);
-        for manager in self.managers.iter_mut() {
-            manager.handle_event(extent, input);
+    pub fn handle_window_event(&mut self, input: winit::event::WindowEvent) {
+        if let Some(event) = input.to_static() {
+            self.events_since_last_step.push(event);
         }
     }
 }

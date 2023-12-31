@@ -1,15 +1,18 @@
 use std::sync::Arc;
 
-use nalgebra::{Isometry3, Point3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use noise::{NoiseFn, OpenSimplex};
-use rapier3d::geometry::{Collider, ColliderBuilder, SharedShape};
+use rapier3d::{
+    dynamics::MassProperties,
+    geometry::{Collider, ColliderBuilder, SharedShape},
+};
 
 use super::block::{BlockDefinitionTable, BlockFace, BlockIdx};
 use crate::render_system::vertex::Vertex3D;
 
-pub const CHUNK_X_SIZE: usize = 32;
-pub const CHUNK_Y_SIZE: usize = 32;
-pub const CHUNK_Z_SIZE: usize = 32;
+pub const CHUNK_X_SIZE: usize = 16;
+pub const CHUNK_Y_SIZE: usize = 16;
+pub const CHUNK_Z_SIZE: usize = 16;
 
 pub fn chunk_idx(x: usize, y: usize, z: usize) -> usize {
     CHUNK_Z_SIZE * CHUNK_Y_SIZE * x + CHUNK_Z_SIZE * y + z
@@ -20,7 +23,11 @@ pub fn chunk_idx2(p: Point3<i32>) -> usize {
 }
 
 pub fn floor_coords(coords: Point3<f32>) -> Point3<i32> {
-    Point3::new(coords.x.floor() as i32, coords.y.floor() as i32, coords.z.floor() as i32)
+    Point3::new(
+        coords.x.floor() as i32,
+        coords.y.floor() as i32,
+        coords.z.floor() as i32,
+    )
 }
 
 pub fn global_to_chunk_coords(global_coords: Point3<i32>) -> (Point3<i32>, Point3<i32>) {
@@ -38,8 +45,6 @@ pub fn global_to_chunk_coords(global_coords: Point3<i32>) -> (Point3<i32>, Point
 
     (chunk_coords, block_coords)
 }
-
-
 
 #[derive(Clone)]
 pub struct WorldgenData {
@@ -62,7 +67,6 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
     let stone = data.block_definition_table.block_idx("stone").unwrap();
     let lamp = data.block_definition_table.block_idx("lamp").unwrap();
 
-
     let scale1 = 20.0;
     for x in 0..CHUNK_X_SIZE {
         for y in 0..CHUNK_Y_SIZE {
@@ -75,7 +79,8 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
                 let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 100.0;
                 let val_above = data
                     .noise
-                    .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1]) - (wy+1.0) / 100.0;
+                    .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1])
+                    - (wy + 1.0) / 100.0;
 
                 let thresh = 0.2;
                 if val_here > thresh {
@@ -125,9 +130,23 @@ pub fn gen_hitbox(blocks: &BlockDefinitionTable, chunk_data: &Vec<BlockIdx>) -> 
             }
         }
     }
+
     match sub_colliders.len() {
         0 => None,
-        _ => Some(ColliderBuilder::compound(sub_colliders).build()),
+        _ => {
+            let mut collider = ColliderBuilder::compound(sub_colliders).build();
+            // computing the mass properties is expensive, and this is terrain
+            // so we can just set the mass properties to infinity
+            collider.set_mass_properties(MassProperties::from_cuboid(
+                f32::INFINITY,
+                Vector3::from([
+                    CHUNK_X_SIZE as f32 * 0.5,
+                    CHUNK_Y_SIZE as f32 * 0.5,
+                    CHUNK_Z_SIZE as f32 * 0.5,
+                ]),
+            ));
+            Some(collider)
+        }
     }
 }
 
@@ -304,7 +323,6 @@ pub fn gen_mesh<'a>(
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v111, t, [0.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
-
                 }
 
                 // back face
@@ -316,7 +334,6 @@ pub fn gen_mesh<'a>(
                     vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v110, t, [1.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
-
                 }
 
                 // front face

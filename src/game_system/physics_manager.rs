@@ -15,9 +15,9 @@ use rapier3d::geometry::ColliderSet;
 use rapier3d::geometry::NarrowPhase;
 use rapier3d::pipeline::PhysicsPipeline;
 
-use crate::entity::EntityCreationData;
-use crate::entity::EntityCreationPhysicsData;
-use crate::entity::WorldChange;
+use crate::game_system::game_world::EntityCreationData;
+use crate::game_system::game_world::EntityCreationPhysicsData;
+use crate::game_system::game_world::WorldChange;
 use crate::utils;
 
 use super::manager::Manager;
@@ -101,10 +101,9 @@ impl Manager for PhysicsManager {
     fn update<'a>(
         &mut self,
         data: UpdateData<'a>,
-        since_last_frame: &Vec<WorldChange>,
     ) -> Vec<WorldChange> {
         // remove or add any entities that we got rid of last frame
-        for world_change in since_last_frame {
+        for world_change in data.world_changes {
             match world_change {
                 WorldChange::AddEntity(entity_id, entity_creation_data) => {
                     self.add_entity(*entity_id, entity_creation_data);
