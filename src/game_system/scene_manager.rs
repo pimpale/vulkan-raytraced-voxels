@@ -26,17 +26,17 @@ impl Manager for SceneManager {
         let mut scene = self.scene.borrow_mut();
         for world_change in data.world_changes.iter() {
             match world_change {
-                WorldChange::AddEntity(entity_id, entity_creation_data) => {
+                WorldChange::GlobalEntityAdd(entity_id, entity_creation_data) => {
                     scene.add_object(
                         *entity_id,
                         &entity_creation_data.mesh,
                         entity_creation_data.isometry.clone(),
                     );
                 }
-                WorldChange::RemoveEntity(entity_id) => {
+                WorldChange::GlobalEntityRemove(entity_id) => {
                     scene.remove_object(*entity_id);
                 }
-                WorldChange::UpdateEntityIsometry(entity_id, isometry) => {
+                WorldChange::GlobalEntityUpdateIsometry(entity_id, isometry) => {
                     scene.update_object(*entity_id, isometry.clone())
                 }
                 _ => {}

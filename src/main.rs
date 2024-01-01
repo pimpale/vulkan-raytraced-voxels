@@ -83,8 +83,10 @@ fn build_scene(
         0,
         EntityCreationData {
             physics: Some(EntityPhysicsData {
-                rigid_body_type: rapier3d::dynamics::RigidBodyType::Dynamic,
+                rigid_body_type: rapier3d::dynamics::RigidBodyType::KinematicVelocityBased,
                 hitbox: utils::get_aabb_hitbox(&ego_mesh),
+                linvel: Vector3::zeros(),
+                angvel: Vector3::zeros(),
             }),
             mesh: ego_mesh,
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
@@ -123,6 +125,8 @@ fn build_scene(
             physics: Some(EntityPhysicsData {
                 rigid_body_type: rapier3d::dynamics::RigidBodyType::Fixed,
                 hitbox: utils::get_aabb_hitbox(&ground_mesh),
+                linvel: Vector3::zeros(),
+                angvel: Vector3::zeros(),
             }),
             mesh: ground_mesh,
             isometry: Isometry3::identity(),

@@ -168,7 +168,7 @@ impl InnerChunkManager {
             if !self.chunk_should_be_loaded(chunk_position) {
                 let chunk = self.chunks.remove(&chunk_position).unwrap();
                 if let Some(entity_id) = chunk.entity_id {
-                    world_changes.push(WorldChange::RemoveEntity(entity_id));
+                    world_changes.push(WorldChange::GlobalEntityRemove(entity_id));
                 }
                 continue;
             }
@@ -269,7 +269,7 @@ impl InnerChunkManager {
                         // get the new entity id
                         // if the chunk already has an entity id, remove it
                         let new_entity_id = if let Some(entity_id) = entity_id {
-                            world_changes.push(WorldChange::RemoveEntity(*entity_id));
+                            world_changes.push(WorldChange::GlobalEntityRemove(*entity_id));
                             *entity_id
                         } else {
                             reserve_entity_id()
@@ -277,7 +277,7 @@ impl InnerChunkManager {
 
                         *entity_id = Some(new_entity_id);
 
-                        world_changes.push(WorldChange::AddEntity(
+                        world_changes.push(WorldChange::GlobalEntityAdd(
                             new_entity_id,
                             EntityCreationData {
                                 mesh,
@@ -290,6 +290,8 @@ impl InnerChunkManager {
                                     Some(hitbox) => Some(EntityPhysicsData {
                                         rigid_body_type: RigidBodyType::Fixed,
                                         hitbox,
+                                        linvel: Vector3::zeros(),
+                                        angvel: Vector3::zeros(),
                                     }),
                                     None => None,
                                 },
@@ -439,6 +441,12 @@ impl ChunkQuerier {
         self.inner.borrow().get_block(global_coords)
     }
 
+    pub fn get_block_f32(&self, global_coords: &Point3<f32>) -> Option<BlockIdx> {
+        self.inner
+            .borrow()
+            .get_block(&chunk::floor_coords(*global_coords))
+    }
+
     pub fn trace_to_solid(
         &self,
         origin: &Point3<f32>,
@@ -491,7 +499,7 @@ impl Manager for ChunkManager {
         // process updates
         for change in world_changes {
             match change {
-                WorldChange::SetBlock {
+                WorldChange::WorldSetBlock {
                     global_coords,
                     block_id,
                 } => {

@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
 
-use nalgebra::Vector3;
-use rapier3d::dynamics::RigidBodyType;
+use nalgebra::{Point3, Vector3};
+use rapier3d::{dynamics::RigidBodyType, math::AngularInertia};
 
 use crate::{
     camera::InteractiveCamera, game_system::game_world::WorldChange,
@@ -15,10 +15,16 @@ use super::{
     manager::{Manager, UpdateData},
 };
 
+enum MovementMode {
+    FreeCam,
+    Ego,
+}
+
 pub struct EgoControlsManager {
     camera: Rc<RefCell<Box<dyn InteractiveCamera>>>,
     chunk_querier: ChunkQuerier,
     block_definition_table: Arc<BlockDefinitionTable>,
+    movement_mode: MovementMode,
     last_broke_block: Instant,
     last_placed_block: Instant,
     user_input_state: UserInputState,
@@ -35,6 +41,7 @@ impl EgoControlsManager {
             camera,
             chunk_querier,
             block_definition_table,
+            movement_mode: MovementMode::FreeCam,
             user_input_state: UserInputState::new(),
             last_broke_block: Instant::now(),
             last_placed_block: Instant::now(),
@@ -82,8 +89,7 @@ impl Manager for EgoControlsManager {
         } = data;
 
         let ego = entities.get(&ego_entity_id).unwrap();
-
-        let mut physics_data = ego.physics_data.clone().unwrap();
+        let physics_data = ego.physics_data.clone().unwrap();
 
         // update user input state
         self.user_input_state.handle_input(window_events);
@@ -101,64 +107,78 @@ impl Manager for EgoControlsManager {
 
         // switch mode
         if UserInputState::key_pressed(window_events, winit::event::VirtualKeyCode::Tab) {
-            let new_rigid_body_type = match physics_data.rigid_body_type {
-                RigidBodyType::KinematicVelocityBased => RigidBodyType::Dynamic,
-                _ => RigidBodyType::KinematicVelocityBased,
-            };
-
-            // remove and re-add entity
-            changes.push(WorldChange::RemoveEntity(ego_entity_id));
-            changes.push(WorldChange::AddEntity(
-                ego_entity_id,
-                EntityCreationData {
-                    physics: Some(EntityPhysicsData {
-                        hitbox: physics_data.hitbox,
-                        rigid_body_type: new_rigid_body_type,
-                    }),
-                    mesh: ego.mesh.clone(),
-                    isometry: ego.isometry,
-                },
-            ));
-
-            // update physics data for the rest of the frame (so we can determine what kind of movements to provide)
-            physics_data.rigid_body_type = new_rigid_body_type;
+            self.movement_mode = match self.movement_mode {
+                MovementMode::FreeCam => MovementMode::Ego,
+                MovementMode::Ego => MovementMode::FreeCam,
+            }
         }
 
         // move
-        let move_magnitude: f32 = 20.0;
+        let move_magnitude: f32 = 2.0;
         let rotate_magnitude: f32 = 2.0;
-        let jump_magnitude: f32 = 20.0;
+        let jump_magnitude: f32 = 4.0;
 
-        match physics_data.rigid_body_type {
-            RigidBodyType::KinematicVelocityBased => {
-                let mut target_linvel = Vector3::zeros();
-                let mut target_angvel = Vector3::zeros();
+        let mut target_linvel = Vector3::zeros();
+        let mut target_angvel = Vector3::zeros();
 
-                if self.user_input_state.current.w {
-                    target_linvel += move_magnitude * Vector3::new(1.0, 0.0, 0.0);
-                }
-                if self.user_input_state.current.s {
-                    target_linvel += move_magnitude * Vector3::new(-1.0, 0.0, 0.0);
-                }
+        if self.user_input_state.current.w {
+            target_linvel += move_magnitude * Vector3::new(1.0, 0.0, 0.0);
+        }
+        if self.user_input_state.current.s {
+            target_linvel += move_magnitude * Vector3::new(-1.0, 0.0, 0.0);
+        }
 
-                if self.user_input_state.current.space {
-                    target_linvel += jump_magnitude * Vector3::new(0.0, 1.0, 0.0);
-                };
-                if self.user_input_state.current.shift {
-                    target_linvel += jump_magnitude * Vector3::new(0.0, -1.0, 0.0);
-                };
+        if self.user_input_state.current.space {
+            target_linvel += jump_magnitude * Vector3::new(0.0, 1.0, 0.0);
+        };
+        if self.user_input_state.current.shift {
+            target_linvel += jump_magnitude * Vector3::new(0.0, -1.0, 0.0);
+        };
 
-                if self.user_input_state.current.a {
-                    target_angvel += rotate_magnitude * Vector3::new(0.0, -1.0, 0.0);
-                }
-                if self.user_input_state.current.d {
-                    target_angvel += rotate_magnitude * Vector3::new(0.0, 1.0, 0.0);
-                }
+        if self.user_input_state.current.a {
+            target_angvel += rotate_magnitude * Vector3::new(0.0, -1.0, 0.0);
+        }
+        if self.user_input_state.current.d {
+            target_angvel += rotate_magnitude * Vector3::new(0.0, 1.0, 0.0);
+        }
 
-                changes.push(WorldChange::MoveEntity {
+        match self.movement_mode {
+            MovementMode::FreeCam => {
+                // if kinematic we can directly set the velocity
+                changes.push(WorldChange::PhysicsSetVelocity {
                     id: ego_entity_id,
-                    velocity: ego.isometry.rotation * target_linvel,
-                    torque: target_angvel,
+                    linvel: ego.isometry.rotation * target_linvel,
+                    angvel: target_angvel,
+                });
+            }
+            MovementMode::Ego => {
+                // current linvel in local coordinates
+                let current_linvel = ego.isometry.rotation.inverse() * physics_data.linvel;
+
+                let mut impulse_necessary = (target_linvel - current_linvel) * physics_data.hitbox.mass() * 0.3;
+
+
+
+                // if ego is not standing on the ground, then we should not be able to move
+                let ground_block = self.chunk_querier.get_block_f32(&Point3::from(
+                    ego.isometry.translation.vector - Vector3::new(0.0, 0.5, 0.0),
+                ));
+
+                if !(ground_block.is_some()
+                    && !self
+                        .block_definition_table
+                        .transparent(ground_block.unwrap()))
+                {
+                    println!("not standing on ground");
+                    impulse_necessary[0] = 0.0;
+                    impulse_necessary[1] = 0.0;
+                    impulse_necessary[2] = 0.0;
+                }
+
+                changes.push(WorldChange::PhysicsApplyCharacterTranslation {
+                    id: ego_entity_id,
+                    translation: ego.isometry.rotation * impulse_necessary,
+                    torque_impulse: Vector3::zeros(),
                 });
             }
             _ => {}
@@ -183,7 +203,7 @@ impl Manager for EgoControlsManager {
             {
                 let air = self.block_definition_table.block_idx("air").unwrap();
 
-                changes.push(WorldChange::SetBlock {
+                changes.push(WorldChange::WorldSetBlock {
                     global_coords,
                     block_id: air,
                 });
@@ -201,7 +221,7 @@ impl Manager for EgoControlsManager {
                         BlockFace::BACK => Vector3::new(0, 0, -1),
                         BlockFace::FRONT => Vector3::new(0, 0, 1),
                     };
-                changes.push(WorldChange::SetBlock {
+                changes.push(WorldChange::WorldSetBlock {
                     global_coords: block_coords,
                     block_id: self.selected_block_id,
                 });

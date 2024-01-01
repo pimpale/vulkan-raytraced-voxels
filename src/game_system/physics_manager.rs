@@ -2,11 +2,15 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use nalgebra::UnitVector3;
 use nalgebra::Vector3;
+use rapier3d::control::EffectiveCharacterMovement;
+use rapier3d::control::KinematicCharacterController;
 use rapier3d::dynamics::CCDSolver;
 use rapier3d::dynamics::ImpulseJointSet;
 use rapier3d::dynamics::IntegrationParameters;
 use rapier3d::dynamics::IslandManager;
+use rapier3d::dynamics::LockedAxes;
 use rapier3d::dynamics::MultibodyJointSet;
 use rapier3d::dynamics::RigidBody;
 use rapier3d::dynamics::RigidBodyBuilder;
@@ -17,6 +21,8 @@ use rapier3d::geometry::BroadPhase;
 use rapier3d::geometry::ColliderSet;
 use rapier3d::geometry::NarrowPhase;
 use rapier3d::pipeline::PhysicsPipeline;
+use rapier3d::pipeline::QueryFilter;
+use rapier3d::pipeline::QueryPipeline;
 
 use crate::game_system::game_world::EntityCreationData;
 use crate::game_system::game_world::EntityPhysicsData;
@@ -36,6 +42,7 @@ struct InnerPhysicsManager {
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
     ccd_solver: CCDSolver,
+    query_pipeline: QueryPipeline,
 
     // entity data
     entities: HashMap<u32, RigidBodyHandle>,
@@ -53,6 +60,7 @@ impl InnerPhysicsManager {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
+            query_pipeline: QueryPipeline::new(),
 
             entities: HashMap::new(),
         }
@@ -67,6 +75,8 @@ impl InnerPhysicsManager {
         if let Some(EntityPhysicsData {
             rigid_body_type,
             hitbox,
+            linvel,
+            angvel,
         }) = physics
         {
             let rigid_body = match rigid_body_type {
@@ -80,6 +90,9 @@ impl InnerPhysicsManager {
                 }
             }
             .position(isometry.clone())
+            .linvel(linvel.clone())
+            .angvel(angvel.clone())
+            .locked_axes(LockedAxes::ROTATION_LOCKED_X | LockedAxes::ROTATION_LOCKED_Z)
             .build();
 
             let rigid_body_handle = self.rigid_body_set.insert(rigid_body);
@@ -135,10 +148,36 @@ impl InnerPhysicsManager {
             &mut self.impulse_joint_set,
             &mut self.multibody_joint_set,
             &mut self.ccd_solver,
-            None,
+            Some(&mut self.query_pipeline),
             &(),
             &(),
         );
+    }
+
+    fn move_character(&mut self, entity_id: u32, desired_translation: Vector3<f32>) -> EffectiveCharacterMovement {
+        let rigid_body = self.get_entity(entity_id).unwrap();
+        let collider_handle = rigid_body.colliders()[0];
+        let collider = self.collider_set.get(collider_handle).unwrap();
+        let kcc = KinematicCharacterController {
+            up: UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
+            offset: rapier3d::control::CharacterLength::Absolute(0.1),
+            slide: true,
+            autostep: None,
+            max_slope_climb_angle: 0.1,
+            min_slope_slide_angle: 0.2,
+            snap_to_ground: None,
+        };
+        kcc.move_shape(
+            0.01,
+            &self.rigid_body_set,
+            &self.collider_set,
+            &self.query_pipeline,
+            collider.shape(),
+            rigid_body.position(),
+            desired_translation,
+            QueryFilter::new(),
+            |_| (),
+        )
     }
 }
 
@@ -160,21 +199,22 @@ impl Manager for PhysicsManager {
         // remove or add any entities that we got rid of last frame
         for world_change in data.world_changes {
             match world_change {
-                WorldChange::AddEntity(entity_id, entity_creation_data) => {
+                WorldChange::GlobalEntityAdd(entity_id, entity_creation_data) => {
                     inner.add_entity(*entity_id, entity_creation_data);
                 }
-                WorldChange::RemoveEntity(id) => {
+                WorldChange::GlobalEntityRemove(id) => {
                     inner.remove_entity(*id);
                 }
-                WorldChange::MoveEntity {
-                    id,
-                    velocity,
-                    torque,
-                } => {
+                WorldChange::PhysicsSetVelocity { id, linvel, angvel } => {
                     let rigid_body = inner.get_mut_entity(*id).unwrap();
-                    rigid_body.set_linvel(*velocity, true);
-                    rigid_body.set_angvel(*torque, true);
+                    rigid_body.set_linvel(*linvel, true);
+                    rigid_body.set_angvel(*angvel, true);
                 }
+                WorldChange::PhysicsApplyCharacterTranslation {
+                    id,
+                    translation,
+                    rotation,
+                } => {}
                 _ => {}
             }
         }
@@ -186,14 +226,26 @@ impl Manager for PhysicsManager {
         inner
             .entities
             .iter()
-            .filter_map(|(id, handle)| {
+            .flat_map(|(id, handle)| {
                 let entity = entities.get(id).unwrap();
+                let mut changes = vec![];
+
                 let new_isometry = *inner.rigid_body_set[*handle].position();
-                if entity.isometry == new_isometry {
-                    None
-                } else {
-                    Some(WorldChange::UpdateEntityIsometry(*id, new_isometry))
+                if entity.isometry != new_isometry {
+                    changes.push(WorldChange::GlobalEntityUpdateIsometry(*id, new_isometry));
                 }
+                let new_linvel = *inner.rigid_body_set[*handle].linvel();
+                let new_angvel = *inner.rigid_body_set[*handle].angvel();
+                if let Some(physics_data) = &entity.physics_data {
+                    if physics_data.linvel != new_linvel || physics_data.angvel != new_angvel {
+                        changes.push(WorldChange::GlobalEntityUpdateVelocity {
+                            id: *id,
+                            linvel: new_linvel,
+                            angvel: new_angvel,
+                        });
+                    }
+                }
+                changes
             })
             .collect()
     }

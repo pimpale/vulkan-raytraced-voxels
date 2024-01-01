@@ -34,6 +34,8 @@ use crate::render_system::vertex::Vertex3D;
 pub struct EntityPhysicsData {
     pub rigid_body_type: RigidBodyType,
     pub hitbox: Collider,
+    pub linvel: Vector3<f32>,
+    pub angvel: Vector3<f32>,
 }
 
 pub struct EntityCreationData {
@@ -56,15 +58,25 @@ pub struct Entity {
 }
 
 pub enum WorldChange {
-    AddEntity(u32, EntityCreationData),
-    RemoveEntity(u32),
-    UpdateEntityIsometry(u32, Isometry3<f32>),
-    MoveEntity {
+    GlobalEntityAdd(u32, EntityCreationData),
+    GlobalEntityRemove(u32),
+    GlobalEntityUpdateIsometry(u32, Isometry3<f32>),
+    GlobalEntityUpdateVelocity {
         id: u32,
-        velocity: Vector3<f32>,
-        torque: Vector3<f32>,
+        linvel: Vector3<f32>,
+        angvel: Vector3<f32>,
     },
-    SetBlock {
+    PhysicsSetVelocity {
+        id: u32,
+        linvel: Vector3<f32>,
+        angvel: Vector3<f32>,
+    },
+    PhysicsApplyCharacterTranslation {
+        id: u32,
+        translation: Vector3<f32>,
+        rotation: Vector3<f32>,
+    },
+    WorldSetBlock {
         global_coords: Point3<i32>,
         block_id: BlockIdx,
     },
@@ -168,7 +180,7 @@ impl GameWorld {
     pub fn update_entity_table(&mut self, changes: &Vec<WorldChange>) {
         for change in changes {
             match change {
-                WorldChange::AddEntity(entity_id, entity_creation_data) => {
+                WorldChange::GlobalEntityAdd(entity_id, entity_creation_data) => {
                     self.entities.insert(
                         *entity_id,
                         Entity {
@@ -178,12 +190,24 @@ impl GameWorld {
                         },
                     );
                 }
-                WorldChange::RemoveEntity(entity_id) => {
+                WorldChange::GlobalEntityRemove(entity_id) => {
                     self.entities.remove(&entity_id);
                 }
-                WorldChange::UpdateEntityIsometry(entity_id, isometry) => {
+                WorldChange::GlobalEntityUpdateIsometry(entity_id, isometry) => {
                     if let Some(entity) = self.entities.get_mut(&entity_id) {
                         entity.isometry = isometry.clone();
+                    }
+                }
+                WorldChange::GlobalEntityUpdateVelocity {
+                    id,
+                    linvel,
+                    angvel,
+                } => {
+                    if let Some(entity) = self.entities.get_mut(id) {
+                        if let Some(physics_data) = &mut entity.physics_data {
+                            physics_data.linvel = linvel.clone();
+                            physics_data.angvel = angvel.clone();
+                        }
                     }
                 }
                 _ => {}
@@ -258,14 +282,14 @@ impl GameWorld {
             },
         );
         self.changes_since_last_step
-            .push(WorldChange::AddEntity(entity_id, entity_creation_data));
+            .push(WorldChange::GlobalEntityAdd(entity_id, entity_creation_data));
     }
 
     // remove an entity from the world
     pub fn remove_entity(&mut self, entity_id: u32) {
         self.entities.remove(&entity_id);
         self.changes_since_last_step
-            .push(WorldChange::RemoveEntity(entity_id));
+            .push(WorldChange::GlobalEntityRemove(entity_id));
     }
 
     pub fn handle_window_event(&mut self, input: winit::event::WindowEvent) {
