@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use game_system::game_world::{EntityCreationData, EntityCreationPhysicsData, GameWorld};
+use game_system::game_world::{EntityCreationData, EntityPhysicsData, GameWorld};
 use nalgebra::{Isometry3, Vector3};
 use rapier3d::geometry::ColliderBuilder;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -82,8 +82,8 @@ fn build_scene(
     world.add_entity(
         0,
         EntityCreationData {
-            physics: Some(EntityCreationPhysicsData {
-                is_dynamic: true,
+            physics: Some(EntityPhysicsData {
+                rigid_body_type: rapier3d::dynamics::RigidBodyType::Dynamic,
                 hitbox: utils::get_aabb_hitbox(&ego_mesh),
             }),
             mesh: ego_mesh,
@@ -120,8 +120,8 @@ fn build_scene(
     world.add_entity(
         3,
         EntityCreationData {
-            physics: Some(EntityCreationPhysicsData {
-                is_dynamic: false,
+            physics: Some(EntityPhysicsData {
+                rigid_body_type: rapier3d::dynamics::RigidBodyType::Fixed,
                 hitbox: utils::get_aabb_hitbox(&ground_mesh),
             }),
             mesh: ground_mesh,

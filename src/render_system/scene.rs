@@ -43,7 +43,7 @@ pub struct Scene<K, Vertex> {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: BTreeMap<K, Option<Object<Vertex>>>,
-    old_objects: Vec<Object<Vertex>>,
+    old_objects: [Vec<Object<Vertex>>; 2],
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
     cached_instance_vertex_buffer_addresses: Option<Subbuffer<[u64]>>,
@@ -82,7 +82,7 @@ where
             command_buffer_allocator,
             memory_allocator,
             objects: BTreeMap::new(),
-            old_objects: vec![],
+            old_objects: [vec![], vec![]],
             cached_tlas: None,
             cached_instance_vertex_buffer_addresses: None,
             cached_instance_transforms: None,
@@ -141,7 +141,7 @@ where
     pub fn remove_object(&mut self, key: K) {
         let removed = self.objects.remove(&key);
         if let Some(removed) = removed.flatten() {
-            self.old_objects.push(removed);
+            self.old_objects[0].push(removed);
             self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
         }
     }
@@ -149,7 +149,8 @@ where
     // SAFETY: after calling this function, any TLAS previously returned by get_tlas() is invalid, and must not in use
     pub unsafe fn dispose_old_objects(&mut self) {
         // clear old objects
-        self.old_objects.clear();
+        self.old_objects[1].clear();
+        self.old_objects.swap(0, 1);
     }
 
     // the returned TLAS may only be used after the returned future has been waited on

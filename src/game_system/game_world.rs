@@ -7,6 +7,7 @@ use nalgebra::Isometry3;
 use nalgebra::Point3;
 use nalgebra::Vector3;
 
+use rapier3d::dynamics::RigidBodyType;
 use rapier3d::geometry::Collider;
 use threadpool::ThreadPool;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -20,7 +21,7 @@ use crate::camera::InteractiveCamera;
 use crate::game_system::block::BlockDefinitionTable;
 use crate::game_system::block::BlockIdx;
 use crate::game_system::chunk_manager::ChunkManager;
-use crate::game_system::ego_controls_manager::EgoMovementManager;
+use crate::game_system::ego_controls_manager::EgoControlsManager;
 use crate::game_system::manager::Manager;
 use crate::game_system::manager::UpdateData;
 use crate::game_system::physics_manager::PhysicsManager;
@@ -29,17 +30,15 @@ use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
 use crate::render_system::vertex::Vertex3D;
 
-pub struct EntityCreationPhysicsData {
-    // if true, the object can be moved by the physics engine
-    // if false, then the object will not move due to forces.
-    pub is_dynamic: bool,
-    // If hitbox is specified, it can still be collided with even if is_dynamic is false
+#[derive(Clone)]
+pub struct EntityPhysicsData {
+    pub rigid_body_type: RigidBodyType,
     pub hitbox: Collider,
 }
 
 pub struct EntityCreationData {
     // if not specified then the object is visual only
-    pub physics: Option<EntityCreationPhysicsData>,
+    pub physics: Option<EntityPhysicsData>,
     // mesh (untransformed)
     pub mesh: Vec<Vertex3D>,
     // initial transformation
@@ -52,6 +51,8 @@ pub struct Entity {
     pub mesh: Vec<Vertex3D>,
     // transformation from origin
     pub isometry: Isometry3<f32>,
+    // physics
+    pub physics_data: Option<EntityPhysicsData>,
 }
 
 pub enum WorldChange {
@@ -63,13 +64,8 @@ pub enum WorldChange {
         velocity: Vector3<f32>,
         torque: Vector3<f32>,
     },
-    BreakBlock {
-        origin: Point3<f32>,
-        direction: Vector3<f32>,
-    },
-    AddBlock {
-        origin: Point3<f32>,
-        direction: Vector3<f32>,
+    SetBlock {
+        global_coords: Point3<i32>,
         block_id: BlockIdx,
     },
 }
@@ -132,11 +128,14 @@ impl GameWorld {
 
         let camera = Rc::new(RefCell::new(camera));
 
-        let ego_movement_manager = EgoMovementManager::new(camera.clone());
+        let (chunk_manager, chunk_querier) = ChunkManager::new(threadpool, 0, block_table.clone());
 
         let physics_manager = PhysicsManager::new();
 
-        let chunk_manager = ChunkManager::new(threadpool, 0, block_table);
+
+        let ego_movement_manager =
+            EgoControlsManager::new(camera.clone(), chunk_querier, block_table.clone());
+
 
         GameWorld {
             entities: HashMap::new(),
@@ -148,9 +147,9 @@ impl GameWorld {
             events_since_last_step: vec![],
             changes_since_last_step: vec![],
             managers: vec![
-                Box::new(ego_movement_manager),
-                Box::new(physics_manager),
                 Box::new(chunk_manager),
+                Box::new(physics_manager),
+                Box::new(ego_movement_manager),
                 Box::new(scene_manager),
             ],
         }
@@ -175,6 +174,7 @@ impl GameWorld {
                         Entity {
                             mesh: entity_creation_data.mesh.clone(),
                             isometry: entity_creation_data.isometry.clone(),
+                            physics_data: entity_creation_data.physics.clone(),
                         },
                     );
                 }
@@ -239,8 +239,9 @@ impl GameWorld {
             up,
         );
 
-        // at this point we can now garbage collect the removed entities from the scene
-        // this is because the renderer will block until the last frame has finished executing
+        // at this point we can now garbage collect removed entities from the last step (but not this step yet!)
+        // this is because the the entities might potentially be in use until the next frame has started rendering
+        // self.renderer.render will block until the current frame starts rendering
         unsafe {
             self.scene.borrow_mut().dispose_old_objects();
         }
@@ -253,6 +254,7 @@ impl GameWorld {
             Entity {
                 mesh: entity_creation_data.mesh.clone(),
                 isometry: entity_creation_data.isometry.clone(),
+                physics_data: entity_creation_data.physics.clone(),
             },
         );
         self.changes_since_last_step

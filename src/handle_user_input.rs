@@ -58,6 +58,37 @@ impl UserInputState {
             previous: Default::default(),
         }
     }
+
+    pub fn last_key_pressed(
+        input: &Vec<winit::event::WindowEvent>,
+        keys: &[VirtualKeyCode],
+    ) -> Option<VirtualKeyCode> {
+        let mut last_key = None;
+        for event in input {
+            match event {
+                winit::event::WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            virtual_keycode: Some(kc),
+                            state,
+                            ..
+                        },
+                    ..
+                } => {
+                    if keys.contains(kc) && state == &ElementState::Pressed {
+                        last_key = Some(*kc);
+                    }
+                }
+                _ => (),
+            }
+        }
+        last_key
+    }
+
+    pub fn key_pressed(input: &Vec<winit::event::WindowEvent>, key: VirtualKeyCode) -> bool {
+        Self::last_key_pressed(input, &[key]).is_some()
+    }
+
     pub fn handle_input(&mut self, input: &Vec<winit::event::WindowEvent>) {
         self.previous = self.current.clone();
         let current = &mut self.current;

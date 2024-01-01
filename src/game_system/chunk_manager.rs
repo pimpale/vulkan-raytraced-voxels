@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     rc::Rc,
     sync::{
@@ -10,11 +11,11 @@ use std::{
 
 use nalgebra::{Isometry3, Point3, Vector3};
 use noise::{NoiseFn, OpenSimplex};
-use rapier3d::geometry::Collider;
+use rapier3d::{dynamics::RigidBodyType, geometry::Collider};
 use threadpool::ThreadPool;
 
 use crate::{
-    game_system::game_world::{EntityCreationData, EntityCreationPhysicsData, WorldChange},
+    game_system::game_world::{EntityCreationData, EntityPhysicsData, WorldChange},
     render_system::vertex::Vertex3D,
 };
 
@@ -25,9 +26,9 @@ use super::{
 };
 
 // if a chunk is within this boundary it will start to render
-const MIN_RENDER_RADIUS_X: i32 = 6;
-const MIN_RENDER_RADIUS_Y: i32 = 6;
-const MIN_RENDER_RADIUS_Z: i32 = 6;
+const MIN_RENDER_RADIUS_X: i32 = 2;
+const MIN_RENDER_RADIUS_Y: i32 = 2;
+const MIN_RENDER_RADIUS_Z: i32 = 2;
 
 // if a chunk is within this boundary it will stop rendering
 const MAX_RENDER_RADIUS_X: i32 = 8;
@@ -53,7 +54,7 @@ enum ChunkWorkerEvent {
     ChunkMeshed(Point3<i32>, Instant, Vec<Vertex3D>, Option<Collider>),
 }
 
-pub struct ChunkManager {
+struct InnerChunkManager {
     threadpool: Arc<ThreadPool>,
     worldgen_data: WorldgenData,
     center_chunk: Point3<i32>,
@@ -62,14 +63,14 @@ pub struct ChunkManager {
     event_reciever: Receiver<ChunkWorkerEvent>,
 }
 
-impl ChunkManager {
+impl InnerChunkManager {
     pub fn new(
         threadpool: Arc<ThreadPool>,
         seed: u32,
         block_definition_table: Arc<BlockDefinitionTable>,
-    ) -> ChunkManager {
+    ) -> Self {
         let (event_sender, event_reciever) = std::sync::mpsc::channel();
-        let mut cm = ChunkManager {
+        let mut cm = Self {
             threadpool,
             worldgen_data: WorldgenData {
                 noise: Arc::new(OpenSimplex::new(seed)),
@@ -286,8 +287,8 @@ impl ChunkManager {
                                     chunk_position[2] as f32 * CHUNK_Z_SIZE as f32,
                                 ),
                                 physics: match hitbox {
-                                    Some(hitbox) => Some(EntityCreationPhysicsData {
-                                        is_dynamic: false,
+                                    Some(hitbox) => Some(EntityPhysicsData {
+                                        rigid_body_type: RigidBodyType::Fixed,
                                         hitbox,
                                     }),
                                     None => None,
@@ -302,7 +303,7 @@ impl ChunkManager {
         world_changes
     }
 
-    fn get_block(&self, global_coords: Point3<i32>) -> Option<BlockIdx> {
+    fn get_block(&self, global_coords: &Point3<i32>) -> Option<BlockIdx> {
         let (chunk_coords, block_coords) = chunk::global_to_chunk_coords(global_coords);
         match self.chunks.get(&chunk_coords) {
             Some(Chunk {
@@ -313,7 +314,7 @@ impl ChunkManager {
         }
     }
 
-    fn set_block(&mut self, global_coords: Point3<i32>, block: BlockIdx) {
+    fn set_block(&mut self, global_coords: &Point3<i32>, block: BlockIdx) {
         let (chunk_coords, block_coords) = chunk::global_to_chunk_coords(global_coords);
 
         let old_block = match self.chunks.get_mut(&chunk_coords) {
@@ -380,9 +381,9 @@ impl ChunkManager {
         &self,
         origin: &Point3<f32>,
         direction: &Vector3<f32>,
+        radius: f32,
     ) -> Option<(Point3<i32>, BlockFace)> {
-        let radius = 8.0;
-        let step = 0.1;
+        let step = 0.01;
 
         let direction = direction.normalize() * step;
 
@@ -397,7 +398,7 @@ impl ChunkManager {
             }
             loc_quantized = chunk::floor_coords(loc.into());
 
-            let block = self.get_block(loc_quantized);
+            let block = self.get_block(&loc_quantized);
             if let Some(block) = block {
                 if !self.worldgen_data.block_definition_table.transparent(block) {
                     let last_loc_quantized = chunk::floor_coords((loc - direction).into());
@@ -428,6 +429,53 @@ impl ChunkManager {
     }
 }
 
+#[derive(Clone)]
+pub struct ChunkQuerier {
+    inner: Rc<RefCell<InnerChunkManager>>,
+}
+
+impl ChunkQuerier {
+    pub fn get_block(&self, global_coords: &Point3<i32>) -> Option<BlockIdx> {
+        self.inner.borrow().get_block(global_coords)
+    }
+
+    pub fn trace_to_solid(
+        &self,
+        origin: &Point3<f32>,
+        direction: &Vector3<f32>,
+        radius: f32,
+    ) -> Option<(Point3<i32>, BlockFace)> {
+        self.inner
+            .borrow()
+            .trace_to_solid(origin, direction, radius)
+    }
+}
+
+pub struct ChunkManager {
+    inner: Rc<RefCell<InnerChunkManager>>,
+}
+
+impl ChunkManager {
+    pub fn new(
+        threadpool: Arc<ThreadPool>,
+        seed: u32,
+        block_definition_table: Arc<BlockDefinitionTable>,
+    ) -> (Self, ChunkQuerier) {
+        let inner = Rc::new(RefCell::new(InnerChunkManager::new(
+            threadpool,
+            seed,
+            block_definition_table,
+        )));
+
+        (
+            Self {
+                inner: inner.clone(),
+            },
+            ChunkQuerier { inner },
+        )
+    }
+}
+
 impl Manager for ChunkManager {
     fn update<'a>(&mut self, data: UpdateData<'a>) -> Vec<WorldChange> {
         let UpdateData {
@@ -438,37 +486,16 @@ impl Manager for ChunkManager {
             ..
         } = data;
 
+        let mut inner = self.inner.borrow_mut();
+
         // process updates
         for change in world_changes {
             match change {
-                WorldChange::BreakBlock { origin, direction } => {
-                    if let Some((block_coords, _)) = self.trace_to_solid(origin, direction) {
-                        let air = self
-                            .worldgen_data
-                            .block_definition_table
-                            .block_idx("air")
-                            .unwrap();
-                        self.set_block(block_coords, air);
-                    }
-                }
-                WorldChange::AddBlock {
-                    origin,
-                    direction,
+                WorldChange::SetBlock {
+                    global_coords,
                     block_id,
                 } => {
-                    if let Some((block_coords, face)) = self.trace_to_solid(origin, direction) {
-                        dbg!(face);
-                        let block_coords = block_coords
-                            + match face {
-                                BlockFace::LEFT => Vector3::new(-1, 0, 0),
-                                BlockFace::RIGHT => Vector3::new(1, 0, 0),
-                                BlockFace::DOWN => Vector3::new(0, -1, 0),
-                                BlockFace::UP => Vector3::new(0, 1, 0),
-                                BlockFace::BACK => Vector3::new(0, 0, -1),
-                                BlockFace::FRONT => Vector3::new(0, 0, 1),
-                            };
-                        self.set_block(block_coords, *block_id);
-                    }
+                    inner.set_block(global_coords, *block_id);
                 }
                 _ => {}
             }
@@ -482,14 +509,14 @@ impl Manager for ChunkManager {
             .vector;
 
         let (ego_chunk_coords, _) =
-            chunk::global_to_chunk_coords(chunk::floor_coords(ego_location.into()));
+            chunk::global_to_chunk_coords(&chunk::floor_coords(ego_location.into()));
 
-        if ego_chunk_coords != self.center_chunk {
-            self.set_center_chunk(ego_chunk_coords);
+        if ego_chunk_coords != inner.center_chunk {
+            inner.set_center_chunk(ego_chunk_coords);
         }
 
         // update chunks
-        let out = self.update_chunks(reserve_entity_id);
+        let out = inner.update_chunks(reserve_entity_id);
 
         out
     }

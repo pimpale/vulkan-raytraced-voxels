@@ -30,7 +30,7 @@ pub fn floor_coords(coords: Point3<f32>) -> Point3<i32> {
     )
 }
 
-pub fn global_to_chunk_coords(global_coords: Point3<i32>) -> (Point3<i32>, Point3<i32>) {
+pub fn global_to_chunk_coords(global_coords: &Point3<i32>) -> (Point3<i32>, Point3<i32>) {
     let chunk_coords = Point3::new(
         (global_coords.x as f32 / CHUNK_X_SIZE as f32).floor() as i32,
         (global_coords.y as f32 / CHUNK_Y_SIZE as f32).floor() as i32,
@@ -65,7 +65,6 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
     let air = data.block_definition_table.block_idx("air").unwrap();
     let grass = data.block_definition_table.block_idx("grass").unwrap();
     let stone = data.block_definition_table.block_idx("stone").unwrap();
-    let lamp = data.block_definition_table.block_idx("lamp").unwrap();
 
     let scale1 = 20.0;
     for x in 0..CHUNK_X_SIZE {
@@ -95,38 +94,21 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
             }
         }
     }
-    blocks[chunk_idx(0, 0, 0)] = lamp;
     blocks
 }
 
 pub fn gen_hitbox(blocks: &BlockDefinitionTable, chunk_data: &Vec<BlockIdx>) -> Option<Collider> {
     let mut sub_colliders = vec![];
 
-    let mut append_hitbox = |x: usize, z: usize, y_start: usize, y_end: usize| {
-        let collider = SharedShape::cuboid(0.5, (y_end - y_start) as f32 * 0.5, 0.5);
-        let position = Isometry3::from(Point3::new(
-            x as f32 + 0.5,
-            (y_end - y_start) as f32 + 0.5,
-            z as f32 + 0.5,
-        ));
-        sub_colliders.push((position, collider));
-    };
-
     for x in 0..CHUNK_X_SIZE {
-        for z in 0..CHUNK_Z_SIZE {
-            let mut current_stretch = 0;
-            for y in 0..CHUNK_Y_SIZE {
-                if blocks.transparent(chunk_data[chunk_idx(x, y, z)]) {
-                    if current_stretch > 0 {
-                        append_hitbox(x, z, y - current_stretch, y);
-                    }
-                    current_stretch = 0;
-                } else {
-                    current_stretch += 1;
+        for y in 0..CHUNK_Y_SIZE {
+            for z in 0..CHUNK_Z_SIZE {
+                if !blocks.transparent(chunk_data[chunk_idx(x, y, z)]) {
+                    let collider = SharedShape::cuboid(0.5, 0.5, 0.5);
+                    let position =
+                        Isometry3::translation(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+                    sub_colliders.push((position, collider));
                 }
-            }
-            if current_stretch > 0 {
-                append_hitbox(x, z, CHUNK_Y_SIZE - current_stretch, CHUNK_Y_SIZE);
             }
         }
     }
