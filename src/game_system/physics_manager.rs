@@ -20,6 +20,7 @@ use rapier3d::dynamics::RigidBodyType;
 use rapier3d::geometry::BroadPhase;
 use rapier3d::geometry::ColliderSet;
 use rapier3d::geometry::NarrowPhase;
+use rapier3d::parry::query::TOIStatus;
 use rapier3d::pipeline::PhysicsPipeline;
 use rapier3d::pipeline::QueryFilter;
 use rapier3d::pipeline::QueryPipeline;
@@ -31,6 +32,13 @@ use crate::game_system::game_world::WorldChange;
 use super::game_world::Entity;
 use super::manager::Manager;
 use super::manager::UpdateData;
+
+struct PhysicsManagerEntityData {
+    rigid_body_handle: RigidBodyHandle,
+    controlled: bool,
+    grounded: bool,
+    clipping: bool,
+}
 
 struct InnerPhysicsManager {
     // physics data
@@ -46,7 +54,7 @@ struct InnerPhysicsManager {
     query_pipeline: QueryPipeline,
 
     // entity data
-    entities: HashMap<u32, (RigidBodyHandle, bool)>,
+    entities: HashMap<u32, PhysicsManagerEntityData>,
 }
 
 impl InnerPhysicsManager {
@@ -79,6 +87,7 @@ impl InnerPhysicsManager {
             linvel,
             angvel,
             controlled,
+            grounded,
         }) = physics
         {
             let rigid_body = match rigid_body_type {
@@ -104,13 +113,23 @@ impl InnerPhysicsManager {
                 &mut self.rigid_body_set,
             );
 
-            self.entities
-                .insert(entity_id, (rigid_body_handle, *controlled));
+            self.entities.insert(
+                entity_id,
+                PhysicsManagerEntityData {
+                    rigid_body_handle,
+                    controlled: *controlled,
+                    grounded: *grounded,
+                    clipping: false,
+                },
+            );
         }
     }
 
     fn remove_entity(&mut self, entity_id: u32) {
-        if let Some((rigid_body_handle, _)) = self.entities.remove(&entity_id) {
+        if let Some(PhysicsManagerEntityData {
+            rigid_body_handle, ..
+        }) = self.entities.remove(&entity_id)
+        {
             self.rigid_body_set.remove(
                 rigid_body_handle,
                 &mut self.island_manager,
@@ -123,7 +142,10 @@ impl InnerPhysicsManager {
     }
 
     fn get_mut_entity<'a>(&'a mut self, entity_id: u32) -> Option<&'a mut RigidBody> {
-        if let Some((rigid_body_handle, _)) = self.entities.get(&entity_id) {
+        if let Some(PhysicsManagerEntityData {
+            rigid_body_handle, ..
+        }) = self.entities.get(&entity_id)
+        {
             self.rigid_body_set.get_mut(*rigid_body_handle)
         } else {
             None
@@ -131,7 +153,10 @@ impl InnerPhysicsManager {
     }
 
     fn get_entity(&self, entity_id: u32) -> Option<RigidBody> {
-        if let Some((rigid_body_handle, _)) = self.entities.get(&entity_id) {
+        if let Some(PhysicsManagerEntityData {
+            rigid_body_handle, ..
+        }) = self.entities.get(&entity_id)
+        {
             Some(self.rigid_body_set[*rigid_body_handle].clone())
         } else {
             None
@@ -139,9 +164,11 @@ impl InnerPhysicsManager {
     }
 
     // shape cast and find distance to a fixed object
-    fn cast_down(&self, entity_id: u32, max_distance: f32) -> f32 {
-        let (rigidbody_handle, _) = self.entities.get(&entity_id).unwrap();
-        let rigidbody = self.rigid_body_set.get(*rigidbody_handle).unwrap();
+    fn cast_down(&self, entity_id: u32, max_distance: f32) -> (f32, bool) {
+        let PhysicsManagerEntityData {
+            rigid_body_handle, ..
+        } = self.entities.get(&entity_id).unwrap();
+        let rigidbody = self.rigid_body_set.get(*rigid_body_handle).unwrap();
         let collider_handle = rigidbody.colliders()[0];
         let collider = self.collider_set.get(collider_handle).unwrap();
         if let Some((_, hit)) = self.query_pipeline.cast_shape(
@@ -154,9 +181,9 @@ impl InnerPhysicsManager {
             true,
             QueryFilter::only_fixed(),
         ) {
-            hit.toi
+            (hit.toi, hit.status == TOIStatus::Penetrating)
         } else {
-            max_distance
+            (max_distance, false)
         }
     }
 
@@ -164,29 +191,67 @@ impl InnerPhysicsManager {
         let integration_parameters = IntegrationParameters::default();
         let gravity_y = -9.81;
 
-        for (id, (handle, controlled)) in self.entities.iter() {
-            if *controlled {
+        let ground_distances: HashMap<u32, (f32, bool)> = HashMap::from_iter(
+            self.entities
+                .iter()
+                .filter(|(_, data)| {
+                    data.controlled
+                        && self
+                            .rigid_body_set
+                            .get(data.rigid_body_handle)
+                            .unwrap()
+                            .body_type()
+                            == RigidBodyType::Dynamic
+                })
+                .map(|(id, _)| (*id, self.cast_down(*id, 1.0))),
+        );
 
-                let dist = self.cast_down(*id, 1.0);
+        for (id, data) in self.entities.iter_mut() {
+            if data.controlled
+                && self
+                    .rigid_body_set
+                    .get(data.rigid_body_handle)
+                    .unwrap()
+                    .body_type()
+                    == RigidBodyType::Dynamic
+            {
+                let (dist, clipping) = ground_distances[id];
 
                 let ground_just_below = dist < 0.05;
                 let intersecting_ground = dist < 0.025;
 
-                let linvel = self.rigid_body_set[*handle].linvel().clone();
+                data.grounded = ground_just_below;
+                data.clipping = clipping;
+
+                let linvel = self.rigid_body_set[data.rigid_body_handle].linvel().clone();
 
                 // we need to make the entity hover slightly off the ground by adding and then removing a force
                 if intersecting_ground {
                     if linvel.y < 0.05 {
-                        self.rigid_body_set[*handle].set_linvel(Vector3::new(linvel.x, -integration_parameters.dt*gravity_y+(0.025-dist), linvel.z), true);
+                        self.rigid_body_set[data.rigid_body_handle].set_linvel(
+                            Vector3::new(
+                                linvel.x,
+                                -integration_parameters.dt * gravity_y + (0.025 - dist),
+                                linvel.z,
+                            ),
+                            true,
+                        );
                     }
                 } else if ground_just_below {
                     if linvel.y < 0.00 {
-                        self.rigid_body_set[*handle].set_linvel(Vector3::new(linvel.x, -integration_parameters.dt*gravity_y, linvel.z), true);
+                        self.rigid_body_set[data.rigid_body_handle].set_linvel(
+                            Vector3::new(
+                                linvel.x,
+                                -integration_parameters.dt * gravity_y,
+                                linvel.z,
+                            ),
+                            true,
+                        );
                     }
                 }
             }
         }
-        
+
         // step physics
         self.physics_pipeline.step(
             &Vector3::new(0.0, gravity_y, 0.0),
@@ -255,27 +320,42 @@ impl Manager for PhysicsManager {
         inner
             .entities
             .iter()
-            .flat_map(|(id, (handle,_))| {
-                let entity = entities.get(id).unwrap();
-                let mut changes = vec![];
+            .flat_map(
+                |(
+                    id,
+                    PhysicsManagerEntityData {
+                        rigid_body_handle,
+                        grounded,
+                        clipping,
+                        ..
+                    },
+                )| {
+                    let entity = entities.get(id).unwrap();
+                    let mut changes = vec![];
 
-                let new_isometry = *inner.rigid_body_set[*handle].position();
-                if entity.isometry != new_isometry {
-                    changes.push(WorldChange::GlobalEntityUpdateIsometry(*id, new_isometry));
-                }
-                let new_linvel = *inner.rigid_body_set[*handle].linvel();
-                let new_angvel = *inner.rigid_body_set[*handle].angvel();
-                if let Some(physics_data) = &entity.physics_data {
-                    if physics_data.linvel != new_linvel || physics_data.angvel != new_angvel {
-                        changes.push(WorldChange::GlobalEntityUpdateVelocity {
-                            id: *id,
-                            linvel: new_linvel,
-                            angvel: new_angvel,
-                        });
+                    let new_isometry = *inner.rigid_body_set[*rigid_body_handle].position();
+                    if entity.isometry != new_isometry {
+                        changes.push(WorldChange::GlobalEntityUpdateIsometry(*id, new_isometry));
                     }
-                }
-                changes
-            })
+                    let new_linvel = *inner.rigid_body_set[*rigid_body_handle].linvel();
+                    let new_angvel = *inner.rigid_body_set[*rigid_body_handle].angvel();
+                    if let Some(physics_data) = &entity.physics_data {
+                        if physics_data.linvel != new_linvel || physics_data.angvel != new_angvel {
+                            changes.push(WorldChange::GlobalEntityUpdateVelocity {
+                                id: *id,
+                                linvel: new_linvel,
+                                angvel: new_angvel,
+                            });
+                        }
+                        let should_be_grounded = *grounded && !*clipping;
+                        if physics_data.grounded != should_be_grounded {
+                            changes
+                                .push(WorldChange::GlobalEntityUpdateGroundedness(*id, should_be_grounded));
+                        }
+                    }
+                    changes
+                },
+            )
             .collect()
     }
 }

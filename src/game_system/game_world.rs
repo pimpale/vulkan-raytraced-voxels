@@ -37,6 +37,7 @@ pub struct EntityPhysicsData {
     pub linvel: Vector3<f32>,
     pub angvel: Vector3<f32>,
     pub controlled: bool,
+    pub grounded: bool,
 }
 
 pub struct EntityCreationData {
@@ -67,6 +68,7 @@ pub enum WorldChange {
         linvel: Vector3<f32>,
         angvel: Vector3<f32>,
     },
+    GlobalEntityUpdateGroundedness(u32, bool),
     PhysicsSetVelocity {
         id: u32,
         linvel: Vector3<f32>,
@@ -208,6 +210,13 @@ impl GameWorld {
                         if let Some(physics_data) = &mut entity.physics_data {
                             physics_data.linvel = linvel.clone();
                             physics_data.angvel = angvel.clone();
+                        }
+                    }
+                }
+                WorldChange::GlobalEntityUpdateGroundedness(id, grounded) => {
+                    if let Some(entity) = self.entities.get_mut(id) {
+                        if let Some(physics_data) = &mut entity.physics_data {
+                            physics_data.grounded = *grounded;
                         }
                     }
                 }

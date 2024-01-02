@@ -194,27 +194,8 @@ impl Manager for EgoControlsManager {
                     * physics_data.hitbox.mass()
                     * 0.3;
 
-                // if !self.user_input_state.current.w && self.user_input_state.current.w {
-                //     impulse_necessary[0] = 0.0;
-                // }
-                if target_yvel == 0.0 {
+                if target_yvel == 0.0 || !physics_data.grounded {
                     impulse_necessary[1] = 0.0;
-                }
-
-                // if ego is not standing on the ground, then we should not be able to move
-                let ground_block = self.chunk_querier.get_block_float(&Point3::from(
-                    ego.isometry.translation.vector - Vector3::new(0.0, 0.7, 0.0),
-                ));
-
-                if !(ground_block.is_some()
-                    && !self
-                        .block_definition_table
-                        .transparent(ground_block.unwrap()))
-                {
-                    println!("not standing on ground");
-                    //impulse_necessary[0] = 0.0;
-                    //impulse_necessary[1] = 0.0;
-                    //impulse_necessary[2] = 0.0;
                 }
 
                 let torque_impulse_necessary = (target_angvel - physics_data.angvel[1])

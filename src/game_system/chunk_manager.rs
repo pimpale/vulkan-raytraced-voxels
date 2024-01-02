@@ -26,9 +26,9 @@ use super::{
 };
 
 // if a chunk is within this boundary it will start to render
-const MIN_RENDER_RADIUS_X: i32 = 2;
-const MIN_RENDER_RADIUS_Y: i32 = 2;
-const MIN_RENDER_RADIUS_Z: i32 = 2;
+const MIN_RENDER_RADIUS_X: i32 = 6;
+const MIN_RENDER_RADIUS_Y: i32 = 6;
+const MIN_RENDER_RADIUS_Z: i32 = 6;
 
 // if a chunk is within this boundary it will stop rendering
 const MAX_RENDER_RADIUS_X: i32 = 8;
@@ -293,6 +293,7 @@ impl InnerChunkManager {
                                         linvel: Vector3::zeros(),
                                         angvel: Vector3::zeros(),
                                         controlled: false,
+                                        grounded: false,
                                     }),
                                     None => None,
                                 },
