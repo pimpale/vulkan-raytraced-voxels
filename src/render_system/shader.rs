@@ -1,4 +1,3 @@
-
 pub mod vs {
     vulkano_shaders::shader! {
         ty: "vertex",
@@ -216,12 +215,12 @@ pub mod fs {
                 bool miss;
                 vec3 new_origin;
                 vec3 new_direction;
-                float new_direction_probability;
+                float scatter_pdf_over_ray_pdf;
             };
 
-            BounceInfo doBounce(IntersectionInfo info, uint seed) {
+            BounceInfo doBounce(vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
                 if(info.miss) {
-                    vec3 sky_emittance = vec3(5.0);
+                    vec3 sky_emittance = vec3(20.0);
                     vec3 sky_reflectance = vec3(0.0);
                     return BounceInfo(
                         sky_emittance,
@@ -236,22 +235,46 @@ pub mod fs {
 
                 vec3 new_origin = info.position;
 
-                // cosine weighted hemisphere sample
-                vec3 new_direction = alignedCosineWeightedSampleHemisphere(
-                    // random uv
-                    randVec2(seed),
-                    // align it with the normal of the object we hit
-                    info.hit_coords
-                );
+                vec3 new_direction;
 
-                float new_direction_probability = 1.0 / (2.0 * M_PI);
+                float scatter_pdf_over_ray_pdf;
+                vec3 emittance;
+                vec3 reflectance; 
 
-                vec3 reflectance = texture(nonuniformEXT(sampler2D(tex[info.t], s)), info.uv).rgb / M_PI;
-                vec3 emittance = vec3(0.0);
-                
-                // for testing
-                if(reflectance.r > 0.2) {
-                    emittance = vec3(5.0);
+                if(info.t == 2) {
+                    // mirror scattering
+                    emittance = vec3(0.0);
+                    reflectance = vec3(1.0);
+                    scatter_pdf_over_ray_pdf = 1.0;
+
+                    new_direction = reflect(
+                        direction,
+                        info.hit_coords.normal
+                    );
+
+                } else {
+                    // lambertian scattering
+
+                    // cosine weighted hemisphere sample
+                    new_direction = alignedCosineWeightedSampleHemisphere(
+                        // random uv
+                        randVec2(seed),
+                        // align it with the normal of the object we hit
+                        info.hit_coords
+                    );
+
+
+                    // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
+                    // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
+                    scatter_pdf_over_ray_pdf = 1.0;
+
+                    reflectance = texture(nonuniformEXT(sampler2D(tex[info.t], s)), info.uv).rgb / M_PI;
+                    emittance = vec3(0.0);
+                    
+                    // for testing
+                    if(reflectance.r > 0.2) {
+                        emittance = vec3(5.0);
+                    }
                 }
 
                 // compute data for this bounce
@@ -261,46 +284,46 @@ pub mod fs {
                     false,
                     new_origin,
                     new_direction,
-                    new_direction_probability
+                    scatter_pdf_over_ray_pdf
                 );
             }
 
             const uint SAMPLES_PER_PIXEL = 64;
-            const uint MAX_BOUNCES = 3;
+            const uint MAX_BOUNCES = 4;
 
             void main() {
                 uint pixel_seed = hash(camera.frame) ^ hashFloat(in_uv.x) ^ hashFloat(in_uv.y);
     
                 vec3 bounce_emittance[MAX_BOUNCES];
                 vec3 bounce_reflectance[MAX_BOUNCES];
-                float bounce_probability[MAX_BOUNCES];
+                float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
 
                 // initial ray origin and direction
-                vec3 origin = camera.eye;
-                vec3 direction = normalize(in_uv.x * camera.right * camera.aspect + in_uv.y * camera.up + camera.front);
+                vec3 first_origin = camera.eye;
+                vec3 first_direction = normalize(in_uv.x * camera.right * camera.aspect + in_uv.y * camera.up + camera.front);
                 
                 // do the first cast, which is deterministic
-                IntersectionInfo first_intersection_info = getIntersectionInfo(origin, direction);
+                IntersectionInfo first_intersection_info = getIntersectionInfo(first_origin, first_direction);
 
                 vec3 color = vec3(0.0);
                 for (uint sample_id = 0; sample_id < SAMPLES_PER_PIXEL; sample_id++) {
                     uint sample_seed = pixel_seed ^ hash(sample_id);
                     // store first bounce data
-                    BounceInfo bounce_info = doBounce(first_intersection_info, sample_seed);
+                    BounceInfo bounce_info = doBounce(first_origin, first_direction, first_intersection_info, sample_seed);
                     bounce_emittance[0] = bounce_info.emittance;
                     bounce_reflectance[0] = bounce_info.reflectance;
-                    bounce_probability[0] = bounce_info.new_direction_probability;
+                    bounce_scatter_pdf_over_ray_pdf[0] = bounce_info.scatter_pdf_over_ray_pdf;
 
-                    origin = bounce_info.new_origin;
-                    direction = bounce_info.new_direction;
+                    vec3 origin = bounce_info.new_origin;
+                    vec3 direction = bounce_info.new_direction;
 
                     uint current_bounce;
                     for (current_bounce = 1; current_bounce < MAX_BOUNCES; current_bounce++) {
                         IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
-                        bounce_info = doBounce(intersection_info, sample_seed ^ hash(current_bounce));
+                        bounce_info = doBounce(origin, direction, intersection_info, sample_seed ^ hash(current_bounce));
                         bounce_emittance[current_bounce] = bounce_info.emittance;
                         bounce_reflectance[current_bounce] = bounce_info.reflectance;
-                        bounce_probability[current_bounce] = bounce_info.new_direction_probability;
+                        bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
 
                         if(bounce_info.miss) {
                             current_bounce++;
@@ -314,7 +337,7 @@ pub mod fs {
                     // compute the color for this sample
                     vec3 sample_color = vec3(0.0);
                     for(int i = int(current_bounce)-1; i >= 0; i--) {
-                        sample_color = bounce_emittance[i] + (sample_color * bounce_reflectance[i] / bounce_probability[i]); 
+                        sample_color = bounce_emittance[i] + (sample_color * bounce_reflectance[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
                     }
                     color += sample_color;
                 }
