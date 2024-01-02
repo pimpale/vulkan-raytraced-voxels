@@ -28,6 +28,7 @@ use crate::game_system::game_world::EntityCreationData;
 use crate::game_system::game_world::EntityPhysicsData;
 use crate::game_system::game_world::WorldChange;
 
+use super::game_world::Entity;
 use super::manager::Manager;
 use super::manager::UpdateData;
 
@@ -45,7 +46,7 @@ struct InnerPhysicsManager {
     query_pipeline: QueryPipeline,
 
     // entity data
-    entities: HashMap<u32, RigidBodyHandle>,
+    entities: HashMap<u32, (RigidBodyHandle, bool)>,
 }
 
 impl InnerPhysicsManager {
@@ -77,6 +78,7 @@ impl InnerPhysicsManager {
             hitbox,
             linvel,
             angvel,
+            controlled,
         }) = physics
         {
             let rigid_body = match rigid_body_type {
@@ -92,7 +94,7 @@ impl InnerPhysicsManager {
             .position(isometry.clone())
             .linvel(linvel.clone())
             .angvel(angvel.clone())
-            .locked_axes(LockedAxes::ROTATION_LOCKED_X | LockedAxes::ROTATION_LOCKED_Z)
+            .enabled_rotations(false, true, false)
             .build();
 
             let rigid_body_handle = self.rigid_body_set.insert(rigid_body);
@@ -102,12 +104,13 @@ impl InnerPhysicsManager {
                 &mut self.rigid_body_set,
             );
 
-            self.entities.insert(entity_id, rigid_body_handle);
+            self.entities
+                .insert(entity_id, (rigid_body_handle, *controlled));
         }
     }
 
     fn remove_entity(&mut self, entity_id: u32) {
-        if let Some(rigid_body_handle) = self.entities.remove(&entity_id) {
+        if let Some((rigid_body_handle, _)) = self.entities.remove(&entity_id) {
             self.rigid_body_set.remove(
                 rigid_body_handle,
                 &mut self.island_manager,
@@ -120,7 +123,7 @@ impl InnerPhysicsManager {
     }
 
     fn get_mut_entity<'a>(&'a mut self, entity_id: u32) -> Option<&'a mut RigidBody> {
-        if let Some(rigid_body_handle) = self.entities.get(&entity_id) {
+        if let Some((rigid_body_handle, _)) = self.entities.get(&entity_id) {
             self.rigid_body_set.get_mut(*rigid_body_handle)
         } else {
             None
@@ -128,18 +131,66 @@ impl InnerPhysicsManager {
     }
 
     fn get_entity(&self, entity_id: u32) -> Option<RigidBody> {
-        if let Some(rigid_body_handle) = self.entities.get(&entity_id) {
+        if let Some((rigid_body_handle, _)) = self.entities.get(&entity_id) {
             Some(self.rigid_body_set[*rigid_body_handle].clone())
         } else {
             None
         }
     }
 
+    // shape cast and find distance to a fixed object
+    fn cast_down(&self, entity_id: u32, max_distance: f32) -> f32 {
+        let (rigidbody_handle, _) = self.entities.get(&entity_id).unwrap();
+        let rigidbody = self.rigid_body_set.get(*rigidbody_handle).unwrap();
+        let collider_handle = rigidbody.colliders()[0];
+        let collider = self.collider_set.get(collider_handle).unwrap();
+        if let Some((_, hit)) = self.query_pipeline.cast_shape(
+            &self.rigid_body_set,
+            &self.collider_set,
+            rigidbody.position(),
+            &Vector3::new(0.0, -1.0, 0.0),
+            collider.shape(),
+            max_distance,
+            true,
+            QueryFilter::only_fixed(),
+        ) {
+            hit.toi
+        } else {
+            max_distance
+        }
+    }
+
     fn update(&mut self) {
+        let integration_parameters = IntegrationParameters::default();
+        let gravity_y = -9.81;
+
+        for (id, (handle, controlled)) in self.entities.iter() {
+            if *controlled {
+
+                let dist = self.cast_down(*id, 1.0);
+
+                let ground_just_below = dist < 0.05;
+                let intersecting_ground = dist < 0.025;
+
+                let linvel = self.rigid_body_set[*handle].linvel().clone();
+
+                // we need to make the entity hover slightly off the ground by adding and then removing a force
+                if intersecting_ground {
+                    if linvel.y < 0.05 {
+                        self.rigid_body_set[*handle].set_linvel(Vector3::new(linvel.x, -integration_parameters.dt*gravity_y+(0.025-dist), linvel.z), true);
+                    }
+                } else if ground_just_below {
+                    if linvel.y < 0.00 {
+                        self.rigid_body_set[*handle].set_linvel(Vector3::new(linvel.x, -integration_parameters.dt*gravity_y, linvel.z), true);
+                    }
+                }
+            }
+        }
+        
         // step physics
         self.physics_pipeline.step(
-            &Vector3::new(0.0, -9.81, 0.0),
-            &IntegrationParameters::default(),
+            &Vector3::new(0.0, gravity_y, 0.0),
+            &integration_parameters,
             &mut self.island_manager,
             &mut self.broad_phase,
             &mut self.narrow_phase,
@@ -152,32 +203,6 @@ impl InnerPhysicsManager {
             &(),
             &(),
         );
-    }
-
-    fn move_character(&mut self, entity_id: u32, desired_translation: Vector3<f32>) -> EffectiveCharacterMovement {
-        let rigid_body = self.get_entity(entity_id).unwrap();
-        let collider_handle = rigid_body.colliders()[0];
-        let collider = self.collider_set.get(collider_handle).unwrap();
-        let kcc = KinematicCharacterController {
-            up: UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
-            offset: rapier3d::control::CharacterLength::Absolute(0.1),
-            slide: true,
-            autostep: None,
-            max_slope_climb_angle: 0.1,
-            min_slope_slide_angle: 0.2,
-            snap_to_ground: None,
-        };
-        kcc.move_shape(
-            0.01,
-            &self.rigid_body_set,
-            &self.collider_set,
-            &self.query_pipeline,
-            collider.shape(),
-            rigid_body.position(),
-            desired_translation,
-            QueryFilter::new(),
-            |_| (),
-        )
     }
 }
 
@@ -210,23 +235,27 @@ impl Manager for PhysicsManager {
                     rigid_body.set_linvel(*linvel, true);
                     rigid_body.set_angvel(*angvel, true);
                 }
-                WorldChange::PhysicsApplyCharacterTranslation {
+                WorldChange::PhysicsApplyImpulse {
                     id,
-                    translation,
-                    rotation,
-                } => {}
+                    impulse,
+                    torque_impulse,
+                } => {
+                    let rigid_body = inner.get_mut_entity(*id).unwrap();
+                    rigid_body.apply_impulse(*impulse, true);
+                    rigid_body.apply_torque_impulse(*torque_impulse, true);
+                }
                 _ => {}
             }
         }
 
-        inner.update();
-
         let UpdateData { entities, .. } = data;
+
+        inner.update();
 
         inner
             .entities
             .iter()
-            .flat_map(|(id, handle)| {
+            .flat_map(|(id, (handle,_))| {
                 let entity = entities.get(id).unwrap();
                 let mut changes = vec![];
 

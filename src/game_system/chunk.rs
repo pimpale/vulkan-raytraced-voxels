@@ -75,11 +75,11 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
                 let wx = x as f64 + chunk_offset[0] as f64;
                 let wy = y as f64 + chunk_offset[1] as f64;
                 let wz = z as f64 + chunk_offset[2] as f64;
-                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 100.0;
+                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 1.0;
                 let val_above = data
                     .noise
                     .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1])
-                    - (wy + 1.0) / 100.0;
+                    - (wy + 1.0) / 1.0;
 
                 let thresh = 0.2;
                 if val_here > thresh {
@@ -116,17 +116,19 @@ pub fn gen_hitbox(blocks: &BlockDefinitionTable, chunk_data: &Vec<BlockIdx>) -> 
     match sub_colliders.len() {
         0 => None,
         _ => {
-            let mut collider = ColliderBuilder::compound(sub_colliders).build();
-            // computing the mass properties is expensive, and this is terrain
-            // so we can just set the mass properties to infinity
-            collider.set_mass_properties(MassProperties::from_cuboid(
-                f32::INFINITY,
-                Vector3::from([
-                    CHUNK_X_SIZE as f32 * 0.5,
-                    CHUNK_Y_SIZE as f32 * 0.5,
-                    CHUNK_Z_SIZE as f32 * 0.5,
-                ]),
-            ));
+            let collider = ColliderBuilder::compound(sub_colliders)
+                // computing the mass properties is expensive, and this is terrain
+                // so we can just set the mass properties to infinity
+                .mass_properties(MassProperties::from_cuboid(
+                    f32::INFINITY,
+                    Vector3::from([
+                        CHUNK_X_SIZE as f32 * 0.5,
+                        CHUNK_Y_SIZE as f32 * 0.5,
+                        CHUNK_Z_SIZE as f32 * 0.5,
+                    ]),
+                ))
+                .build();
+
             Some(collider)
         }
     }

@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use game_system::game_world::{EntityCreationData, EntityPhysicsData, GameWorld};
 use nalgebra::{Isometry3, Vector3};
-use rapier3d::geometry::ColliderBuilder;
+use rapier3d::{dynamics::RigidBodyType, geometry::ColliderBuilder};
+
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::swapchain::Surface;
@@ -83,10 +84,12 @@ fn build_scene(
         0,
         EntityCreationData {
             physics: Some(EntityPhysicsData {
-                rigid_body_type: rapier3d::dynamics::RigidBodyType::KinematicVelocityBased,
+                rigid_body_type: RigidBodyType::KinematicVelocityBased,
                 hitbox: utils::get_aabb_hitbox(&ego_mesh),
+                //                hitbox: ColliderBuilder::capsule_y(0.5, 0.5).build(),
                 linvel: Vector3::zeros(),
                 angvel: Vector3::zeros(),
+                controlled: true,
             }),
             mesh: ego_mesh,
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
@@ -127,6 +130,7 @@ fn build_scene(
                 hitbox: utils::get_aabb_hitbox(&ground_mesh),
                 linvel: Vector3::zeros(),
                 angvel: Vector3::zeros(),
+                controlled: false,
             }),
             mesh: ground_mesh,
             isometry: Isometry3::identity(),

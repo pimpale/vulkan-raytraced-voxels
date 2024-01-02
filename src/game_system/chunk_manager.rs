@@ -292,6 +292,7 @@ impl InnerChunkManager {
                                         hitbox,
                                         linvel: Vector3::zeros(),
                                         angvel: Vector3::zeros(),
+                                        controlled: false,
                                     }),
                                     None => None,
                                 },
@@ -441,7 +442,7 @@ impl ChunkQuerier {
         self.inner.borrow().get_block(global_coords)
     }
 
-    pub fn get_block_f32(&self, global_coords: &Point3<f32>) -> Option<BlockIdx> {
+    pub fn get_block_float(&self, global_coords: &Point3<f32>) -> Option<BlockIdx> {
         self.inner
             .borrow()
             .get_block(&chunk::floor_coords(*global_coords))

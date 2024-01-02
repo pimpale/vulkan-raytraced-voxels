@@ -36,6 +36,7 @@ pub struct EntityPhysicsData {
     pub hitbox: Collider,
     pub linvel: Vector3<f32>,
     pub angvel: Vector3<f32>,
+    pub controlled: bool,
 }
 
 pub struct EntityCreationData {
@@ -71,10 +72,10 @@ pub enum WorldChange {
         linvel: Vector3<f32>,
         angvel: Vector3<f32>,
     },
-    PhysicsApplyCharacterTranslation {
+    PhysicsApplyImpulse {
         id: u32,
-        translation: Vector3<f32>,
-        rotation: Vector3<f32>,
+        impulse: Vector3<f32>,
+        torque_impulse: Vector3<f32>,
     },
     WorldSetBlock {
         global_coords: Point3<i32>,
