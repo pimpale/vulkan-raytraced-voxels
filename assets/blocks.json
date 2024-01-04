@@ -1,0 +1,196 @@
+{
+    "blocks": {
+        "texturetest": {
+            "left": {
+                "reflectivity": "./blocks/texturetest/left.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "right": {
+                "reflectivity": "./blocks/texturetest/right.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "down": {
+                "reflectivity": "./blocks/texturetest/down.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "up": {
+                "reflectivity": "./blocks/texturetest/up.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "back": {
+                "reflectivity": "./blocks/texturetest/back.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "front": {
+                "reflectivity": "./blocks/texturetest/front.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            }
+        },
+        "grass": {
+            "left": {
+                "reflectivity": "./blocks/grass/left.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "right": {
+                "reflectivity": "./blocks/grass/right.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "down": {
+                "reflectivity": "./blocks/grass/down.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "up": {
+                "reflectivity": "./blocks/grass/up.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "back": {
+                "reflectivity": "./blocks/grass/back.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "front": {
+                "reflectivity": "./blocks/grass/front.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            }
+        },
+        "soil": {
+            "left": {
+                "reflectivity": "./blocks/soil/left.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "right": {
+                "reflectivity": "./blocks/soil/right.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "down": {
+                "reflectivity": "./blocks/soil/down.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "up": {
+                "reflectivity": "./blocks/soil/up.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "back": {
+                "reflectivity": "./blocks/soil/back.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "front": {
+                "reflectivity": "./blocks/soil/front.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            }
+        },
+        "stone": {
+            "left": {
+                "reflectivity": "./blocks/stone/left.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "right": {
+                "reflectivity": "./blocks/stone/right.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "down": {
+                "reflectivity": "./blocks/stone/down.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "up": {
+                "reflectivity": "./blocks/stone/up.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "back": {
+                "reflectivity": "./blocks/stone/back.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "front": {
+                "reflectivity": "./blocks/stone/front.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            }
+        },
+        "lamp": {
+            "left": {
+                "reflectivity": "./blocks/lamp/left.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "right": {
+                "reflectivity": "./blocks/lamp/right.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "down": {
+                "reflectivity": "./blocks/lamp/down.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "up": {
+                "reflectivity": "./blocks/lamp/up.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "back": {
+                "reflectivity": "./blocks/lamp/back.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "front": {
+                "reflectivity": "./blocks/lamp/front.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            }
+        },
+        "glass": {
+            "left": {
+                "reflectivity": "./blocks/glass/left.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "right": {
+                "reflectivity": "./blocks/glass/right.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "down": {
+                "reflectivity": "./blocks/glass/down.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "up": {
+                "reflectivity": "./blocks/glass/up.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "back": {
+                "reflectivity": "./blocks/glass/back.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            },
+            "front": {
+                "reflectivity": "./blocks/glass/front.png",
+                "emissivity": "./black.png",
+                "metallicity": "./black.png"
+            }
+        }
+    }
+}

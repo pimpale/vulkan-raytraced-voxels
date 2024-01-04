@@ -1,13 +1,14 @@
-use std::fmt::Display;
+use serde::Deserialize;
+use std::{collections::HashMap, fmt::Display};
 
-use image::RgbaImage;
+use image::RgbImage;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BlockFace {
-    DOWN,
-    UP,
     LEFT,
     RIGHT,
+    DOWN,
+    UP,
     BACK,
     FRONT,
 }
@@ -15,24 +16,44 @@ pub enum BlockFace {
 impl Display for BlockFace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockFace::DOWN => write!(f, "down"),
-            BlockFace::UP => write!(f, "up"),
             BlockFace::LEFT => write!(f, "left"),
             BlockFace::RIGHT => write!(f, "right"),
+            BlockFace::DOWN => write!(f, "down"),
+            BlockFace::UP => write!(f, "up"),
             BlockFace::BACK => write!(f, "back"),
             BlockFace::FRONT => write!(f, "front"),
         }
     }
 }
 
-pub struct BlockDefinition {
-    pub name: String,
-    pub transparent: bool,
+#[derive(Deserialize)]
+pub struct TextureDefinition {
+    // texture for how much light is reflected at each point
+    reflectivity: String,
+    // texture for how much light is emitted at each point
+    emissivity: String,
+    // texture for the chance that the the light will be reflected specularly at each point
+    metallicity: String,
+}
+
+#[derive(Deserialize)]
+pub struct BlockJson {
+    pub left: TextureDefinition,
+    pub right: TextureDefinition,
+    pub down: TextureDefinition,
+    pub up: TextureDefinition,
+    pub back: TextureDefinition,
+    pub front: TextureDefinition,
+}
+
+#[derive(Deserialize)]
+pub struct BlocksJson {
+    pub blocks: HashMap<String, BlockJson>,
 }
 
 pub struct BlockDefinitionTable {
     block_textures_offset: usize,
-    blocks: Vec<BlockDefinition>,
+    block_lookup: HashMap<String, BlockIdx>,
 }
 
 pub type BlockIdx = u8;
@@ -41,63 +62,57 @@ impl BlockDefinitionTable {
     // appends block textures to current_texture_atlas
     pub fn load_assets(
         assets_path: &str,
-        current_texture_atlas: &mut Vec<RgbaImage>,
+        current_texture_atlas: &mut Vec<(RgbImage, RgbImage, RgbImage)>,
     ) -> BlockDefinitionTable {
         let block_textures_offset = current_texture_atlas.len();
 
-        let mut blocks: Vec<BlockDefinition> = std::fs::read_dir(assets_path)
-            .unwrap()
-            .map(|x| x.unwrap())
-            .map(|x| {
-                let name = x.file_name().into_string().unwrap();
-                // single file is not a block
-                let transparent = x.file_type().unwrap().is_file();
-                BlockDefinition { name, transparent }
-            })
-            .collect();
+        let block_definitions_path = format!("{}/blocks.json", assets_path);
+        let blocks_json: BlocksJson =
+            serde_json::from_str(&std::fs::read_to_string(block_definitions_path).unwrap())
+                .unwrap();
 
-        // ensure all transparent blocks are at the end, so that we can use the block index as texture index
-        blocks.sort_by_key(|x| x.transparent);
+                let mut block_lookup = HashMap::new();
+                block_lookup.insert("air".to_string(), blocks_json.blocks.len() as BlockIdx);
 
-        for block in &blocks {
-            if block.transparent {
-                continue;
-            }
 
-            for face in [
-                BlockFace::DOWN,
-                BlockFace::UP,
-                BlockFace::LEFT,
-                BlockFace::RIGHT,
-                BlockFace::BACK,
-                BlockFace::FRONT,
-            ] {
-                let texture_path = format!("{}/{}/{}.png", assets_path, block.name, face);
-                let texture = image::open(texture_path).unwrap().to_rgba8();
-                current_texture_atlas.push(texture);
-            }
+        for (idx, (name, block)) in blocks_json.blocks.iter().enumerate() {
+            let mut load_texture = |tex: &TextureDefinition| {
+                let reflectivity_path = format!("{}/{}", assets_path, tex.reflectivity);
+                let reflectivity = image::open(reflectivity_path).unwrap().to_rgb8();
+                let emissivity_path = format!("{}/{}", assets_path, tex.emissivity);
+                let emissivity = image::open(emissivity_path).unwrap().to_rgb8();
+                let metallicity_path = format!("{}/{}", assets_path, tex.metallicity);
+                let metallicity = image::open(metallicity_path).unwrap().to_rgb8();
+                current_texture_atlas.push((reflectivity, emissivity, metallicity));
+            };
+
+            load_texture(&block.left);
+            load_texture(&block.right);
+            load_texture(&block.down);
+            load_texture(&block.up);
+            load_texture(&block.back);
+            load_texture(&block.front);
+
+            block_lookup.insert(name.clone(), idx as BlockIdx);
+
         }
 
-        dbg!(current_texture_atlas.len(), block_textures_offset);
         BlockDefinitionTable {
             block_textures_offset,
-            blocks,
+            block_lookup,
         }
     }
 
-    pub fn get_texture_offset(&self, block_idx: BlockIdx, face: BlockFace) -> u32 {
+    pub fn get_material_offset(&self, block_idx: BlockIdx, face: BlockFace) -> u32 {
         let texture_idx = self.block_textures_offset + (block_idx as usize) * 6 + face as usize;
         texture_idx as u32
     }
 
     pub fn transparent(&self, block_idx: BlockIdx) -> bool {
-        self.blocks[block_idx as usize].transparent
+        block_idx == self.block_lookup.len() as BlockIdx-1
     }
 
     pub fn block_idx(&self, name: &str) -> Option<BlockIdx> {
-        self.blocks
-            .iter()
-            .position(|x| x.name == name)
-            .map(|x| x as BlockIdx)
+        self.block_lookup.get(name).map(|x| *x)
     }
 }

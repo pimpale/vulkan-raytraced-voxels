@@ -75,11 +75,11 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
                 let wx = x as f64 + chunk_offset[0] as f64;
                 let wy = y as f64 + chunk_offset[1] as f64;
                 let wz = z as f64 + chunk_offset[2] as f64;
-                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 100.0;
+                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 10.0;
                 let val_above = data
                     .noise
                     .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1])
-                    - (wy + 1.0) / 100.0;
+                    - (wy + 1.0) / 10.0;
 
                 let thresh = 0.2;
                 if val_here > thresh {
@@ -137,8 +137,8 @@ pub fn gen_hitbox(blocks: &BlockDefinitionTable, chunk_data: &Vec<BlockIdx>) -> 
 pub struct NeighboringChunkData<'a> {
     pub left: &'a Vec<BlockIdx>,
     pub right: &'a Vec<BlockIdx>,
-    pub up: &'a Vec<BlockIdx>,
     pub down: &'a Vec<BlockIdx>,
+    pub up: &'a Vec<BlockIdx>,
     pub back: &'a Vec<BlockIdx>,
     pub front: &'a Vec<BlockIdx>,
 }
@@ -162,8 +162,8 @@ pub fn gen_mesh<'a>(
 
     let mut left_slice = vec![0; CHUNK_Y_SIZE * CHUNK_Z_SIZE];
     let mut right_slice = vec![0; CHUNK_Y_SIZE * CHUNK_Z_SIZE];
-    let mut up_slice = vec![0; CHUNK_X_SIZE * CHUNK_Z_SIZE];
     let mut down_slice = vec![0; CHUNK_X_SIZE * CHUNK_Z_SIZE];
+    let mut up_slice = vec![0; CHUNK_X_SIZE * CHUNK_Z_SIZE];
     let mut back_slice = vec![0; CHUNK_X_SIZE * CHUNK_Y_SIZE];
     let mut front_slice = vec![0; CHUNK_X_SIZE * CHUNK_Y_SIZE];
 
@@ -267,7 +267,7 @@ pub fn gen_mesh<'a>(
 
                 // left face
                 if blocks.transparent(left_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::LEFT);
+                    let t = blocks.get_material_offset(block_idx, BlockFace::LEFT);
                     vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
@@ -278,7 +278,7 @@ pub fn gen_mesh<'a>(
 
                 // right face
                 if blocks.transparent(right_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::RIGHT);
+                    let t = blocks.get_material_offset(block_idx, BlockFace::RIGHT);
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
@@ -289,7 +289,7 @@ pub fn gen_mesh<'a>(
 
                 // lower face
                 if blocks.transparent(down_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::DOWN);
+                    let t = blocks.get_material_offset(block_idx, BlockFace::DOWN);
                     vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
@@ -300,7 +300,7 @@ pub fn gen_mesh<'a>(
 
                 // upper face
                 if blocks.transparent(up_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::UP);
+                    let t = blocks.get_material_offset(block_idx, BlockFace::UP);
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
@@ -311,7 +311,7 @@ pub fn gen_mesh<'a>(
 
                 // back face
                 if blocks.transparent(back_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::BACK);
+                    let t = blocks.get_material_offset(block_idx, BlockFace::BACK);
                     vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v000, t, [0.0, 1.0]));
@@ -322,7 +322,7 @@ pub fn gen_mesh<'a>(
 
                 // front face
                 if blocks.transparent(front_block_idx) {
-                    let t = blocks.get_texture_offset(block_idx, BlockFace::FRONT);
+                    let t = blocks.get_material_offset(block_idx, BlockFace::FRONT);
                     vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));

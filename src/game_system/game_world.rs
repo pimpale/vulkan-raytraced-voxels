@@ -117,7 +117,7 @@ impl GameWorld {
         let mut texture_atlas = vec![];
 
         let block_table = Arc::new(BlockDefinitionTable::load_assets(
-            "assets/blocks",
+            "assets",
             &mut texture_atlas,
         ));
 

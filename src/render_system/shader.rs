@@ -93,7 +93,7 @@ pub mod fs {
             }
 
             vec2 randVec2(uint seed) {
-                return vec2(floatConstruct(seed), floatConstruct(hash(seed)));
+                return vec2(floatConstruct(hash(seed)), floatConstruct(hash(seed+1)));
             }
               
             // returns a vector sampled from the hemisphere with positive y
@@ -210,8 +210,8 @@ pub mod fs {
             }
 
             struct BounceInfo {
-                vec3 emittance;
-                vec3 reflectance;
+                vec3 emissivity;
+                vec3 reflectivity;
                 bool miss;
                 vec3 new_origin;
                 vec3 new_direction;
@@ -220,11 +220,11 @@ pub mod fs {
 
             BounceInfo doBounce(vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
                 if(info.miss) {
-                    vec3 sky_emittance = vec3(20.0);
-                    vec3 sky_reflectance = vec3(0.0);
+                    vec3 sky_emissivity = vec3(20.0);
+                    vec3 sky_reflectivity = vec3(0.0);
                     return BounceInfo(
-                        sky_emittance,
-                        sky_reflectance,
+                        sky_emissivity,
+                        sky_reflectivity,
                         // miss, so the ray is done
                         true,
                         vec3(0.0),
@@ -238,13 +238,12 @@ pub mod fs {
                 vec3 new_direction;
 
                 float scatter_pdf_over_ray_pdf;
-                vec3 emittance;
-                vec3 reflectance; 
+                vec3 reflectivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgb;
+                vec3 emissivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
+                float metallicity = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).r;
 
-                if(info.t == 2) {
+                if(floatConstruct(seed) < metallicity) {
                     // mirror scattering
-                    emittance = vec3(0.0);
-                    reflectance = vec3(1.0);
                     scatter_pdf_over_ray_pdf = 1.0;
 
                     new_direction = reflect(
@@ -254,6 +253,7 @@ pub mod fs {
 
                 } else {
                     // lambertian scattering
+                    reflectivity = reflectivity / M_PI;
 
                     // cosine weighted hemisphere sample
                     new_direction = alignedCosineWeightedSampleHemisphere(
@@ -263,24 +263,15 @@ pub mod fs {
                         info.hit_coords
                     );
 
-
                     // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
                     // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
                     scatter_pdf_over_ray_pdf = 1.0;
-
-                    reflectance = texture(nonuniformEXT(sampler2D(tex[info.t], s)), info.uv).rgb / M_PI;
-                    emittance = vec3(0.0);
-                    
-                    // for testing
-                    if(reflectance.r > 0.2) {
-                        emittance = vec3(5.0);
-                    }
                 }
 
                 // compute data for this bounce
                 return BounceInfo(
-                    emittance,
-                    reflectance,
+                    emissivity,
+                    reflectivity,
                     false,
                     new_origin,
                     new_direction,
@@ -294,8 +285,8 @@ pub mod fs {
             void main() {
                 uint pixel_seed = hash(camera.frame) ^ hashFloat(in_uv.x) ^ hashFloat(in_uv.y);
     
-                vec3 bounce_emittance[MAX_BOUNCES];
-                vec3 bounce_reflectance[MAX_BOUNCES];
+                vec3 bounce_emissivity[MAX_BOUNCES];
+                vec3 bounce_reflectivity[MAX_BOUNCES];
                 float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
 
                 // initial ray origin and direction
@@ -310,8 +301,8 @@ pub mod fs {
                     uint sample_seed = pixel_seed ^ hash(sample_id);
                     // store first bounce data
                     BounceInfo bounce_info = doBounce(first_origin, first_direction, first_intersection_info, sample_seed);
-                    bounce_emittance[0] = bounce_info.emittance;
-                    bounce_reflectance[0] = bounce_info.reflectance;
+                    bounce_emissivity[0] = bounce_info.emissivity;
+                    bounce_reflectivity[0] = bounce_info.reflectivity;
                     bounce_scatter_pdf_over_ray_pdf[0] = bounce_info.scatter_pdf_over_ray_pdf;
 
                     vec3 origin = bounce_info.new_origin;
@@ -321,8 +312,8 @@ pub mod fs {
                     for (current_bounce = 1; current_bounce < MAX_BOUNCES; current_bounce++) {
                         IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
                         bounce_info = doBounce(origin, direction, intersection_info, sample_seed ^ hash(current_bounce));
-                        bounce_emittance[current_bounce] = bounce_info.emittance;
-                        bounce_reflectance[current_bounce] = bounce_info.reflectance;
+                        bounce_emissivity[current_bounce] = bounce_info.emissivity;
+                        bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                         bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
 
                         if(bounce_info.miss) {
@@ -337,7 +328,7 @@ pub mod fs {
                     // compute the color for this sample
                     vec3 sample_color = vec3(0.0);
                     for(int i = int(current_bounce)-1; i >= 0; i--) {
-                        sample_color = bounce_emittance[i] + (sample_color * bounce_reflectance[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
+                        sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
                     }
                     color += sample_color;
                 }

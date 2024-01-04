@@ -1,7 +1,7 @@
 use core::panic;
 use std::sync::Arc;
 
-use image::RgbaImage;
+use image::{DynamicImage, RgbImage, RgbaImage};
 use nalgebra::{Point3, Vector3};
 use vulkano::{
     acceleration_structure::AccelerationStructure,
@@ -325,8 +325,16 @@ impl Renderer {
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-        texture_atlas: Vec<RgbaImage>,
+        texture_atlas: Vec<(RgbImage, RgbImage, RgbImage)>,
     ) -> Renderer {
+        let texture_atlas = texture_atlas
+            .into_iter()
+            .flat_map(|(reflectivity, emissivity, metallicity)| {
+                [reflectivity, emissivity, metallicity]
+            })
+            .map(|image| DynamicImage::ImageRgb8(image).to_rgba8())
+            .collect::<Vec<_>>();
+
         let device = memory_allocator.device().clone();
 
         let (swapchain, images) = create_swapchain(device.clone(), surface.clone());
@@ -560,7 +568,10 @@ impl Renderer {
                 PipelineBindPoint::Graphics,
                 self.pipeline.layout().clone(),
                 0,
-                (self.material_descriptor_set.clone(), per_frame_descriptor_set),
+                (
+                    self.material_descriptor_set.clone(),
+                    per_frame_descriptor_set,
+                ),
             )
             .unwrap()
             .push_constants(
