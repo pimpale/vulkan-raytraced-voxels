@@ -239,7 +239,7 @@ pub mod fs {
 
                 float scatter_pdf_over_ray_pdf;
                 vec3 reflectivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgb;
-                vec3 emissivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
+                vec3 emissivity = 50.0*texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
                 float metallicity = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).r;
 
                 if(floatConstruct(seed) < metallicity) {
@@ -279,7 +279,7 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 64;
+            const uint SAMPLES_PER_PIXEL = 1;
             const uint MAX_BOUNCES = 4;
 
             void main() {
@@ -334,7 +334,8 @@ pub mod fs {
                 }
             
                 // average the samples
-                f_color = vec4(color / float(SAMPLES_PER_PIXEL), 1.0);
+                vec3 pixel_color = color / float(SAMPLES_PER_PIXEL);
+                f_color = vec4(pixel_color, 1.0);
             }
         ",
     }

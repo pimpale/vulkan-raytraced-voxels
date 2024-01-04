@@ -1,5 +1,8 @@
 use serde::Deserialize;
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Display,
+};
 
 use image::RgbImage;
 
@@ -48,7 +51,7 @@ pub struct BlockJson {
 
 #[derive(Deserialize)]
 pub struct BlocksJson {
-    pub blocks: HashMap<String, BlockJson>,
+    pub blocks: BTreeMap<String, BlockJson>,
 }
 
 pub struct BlockDefinitionTable {
@@ -71,11 +74,10 @@ impl BlockDefinitionTable {
             serde_json::from_str(&std::fs::read_to_string(block_definitions_path).unwrap())
                 .unwrap();
 
-                let mut block_lookup = HashMap::new();
-                block_lookup.insert("air".to_string(), blocks_json.blocks.len() as BlockIdx);
+        let mut block_lookup = HashMap::new();
+        block_lookup.insert("air".to_string(), blocks_json.blocks.len() as BlockIdx);
 
-
-        for (idx, (name, block)) in blocks_json.blocks.iter().enumerate() {
+        for (idx, (name, block)) in blocks_json.blocks.into_iter().enumerate() {
             let mut load_texture = |tex: &TextureDefinition| {
                 let reflectivity_path = format!("{}/{}", assets_path, tex.reflectivity);
                 let reflectivity = image::open(reflectivity_path).unwrap().to_rgb8();
@@ -93,8 +95,7 @@ impl BlockDefinitionTable {
             load_texture(&block.back);
             load_texture(&block.front);
 
-            block_lookup.insert(name.clone(), idx as BlockIdx);
-
+            block_lookup.insert(name, idx as BlockIdx);
         }
 
         BlockDefinitionTable {
@@ -109,7 +110,7 @@ impl BlockDefinitionTable {
     }
 
     pub fn transparent(&self, block_idx: BlockIdx) -> bool {
-        block_idx == self.block_lookup.len() as BlockIdx-1
+        block_idx == self.block_lookup.len() as BlockIdx - 1
     }
 
     pub fn block_idx(&self, name: &str) -> Option<BlockIdx> {
