@@ -10,9 +10,9 @@ use rapier3d::{
 use super::block::{BlockDefinitionTable, BlockFace, BlockIdx};
 use crate::render_system::vertex::Vertex3D;
 
-pub const CHUNK_X_SIZE: usize = 8;
-pub const CHUNK_Y_SIZE: usize = 8;
-pub const CHUNK_Z_SIZE: usize = 8;
+pub const CHUNK_X_SIZE: usize = 32;
+pub const CHUNK_Y_SIZE: usize = 32;
+pub const CHUNK_Z_SIZE: usize = 32;
 
 pub fn chunk_idx(x: usize, y: usize, z: usize) -> usize {
     CHUNK_Z_SIZE * CHUNK_Y_SIZE * x + CHUNK_Z_SIZE * y + z
@@ -75,11 +75,11 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
                 let wx = x as f64 + chunk_offset[0] as f64;
                 let wy = y as f64 + chunk_offset[1] as f64;
                 let wz = z as f64 + chunk_offset[2] as f64;
-                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 100.0;
+                let val_here = noise.get([wx / scale1, wy / scale1, wz / scale1]) - wy / 500.0;
                 let val_above = data
                     .noise
                     .get([wx / scale1, (wy + 1.0) / scale1, wz / scale1])
-                    - (wy + 1.0) / 100.0;
+                    - (wy + 1.0) / 500.0;
 
                 let thresh = 0.2;
                 if val_here > thresh {

@@ -135,6 +135,7 @@ impl GameWorld {
             transfer_queue.clone(),
             memory_allocator.clone(),
             command_buffer_allocator.clone(),
+            renderer.n_swapchain_images(),
         )));
 
         let threadpool = Arc::new(ThreadPool::new(15));
@@ -147,10 +148,8 @@ impl GameWorld {
 
         let physics_manager = PhysicsManager::new();
 
-
         let ego_movement_manager =
             EgoControlsManager::new(camera.clone(), chunk_querier, block_table.clone());
-
 
         GameWorld {
             entities: HashMap::new(),
@@ -201,11 +200,7 @@ impl GameWorld {
                         entity.isometry = isometry.clone();
                     }
                 }
-                WorldChange::GlobalEntityUpdateVelocity {
-                    id,
-                    linvel,
-                    angvel,
-                } => {
+                WorldChange::GlobalEntityUpdateVelocity { id, linvel, angvel } => {
                     if let Some(entity) = self.entities.get_mut(id) {
                         if let Some(physics_data) = &mut entity.physics_data {
                             physics_data.linvel = linvel.clone();
@@ -292,7 +287,10 @@ impl GameWorld {
             },
         );
         self.changes_since_last_step
-            .push(WorldChange::GlobalEntityAdd(entity_id, entity_creation_data));
+            .push(WorldChange::GlobalEntityAdd(
+                entity_id,
+                entity_creation_data,
+            ));
     }
 
     // remove an entity from the world

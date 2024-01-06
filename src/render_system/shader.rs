@@ -97,6 +97,7 @@ pub mod fs {
             }
               
             // returns a vector sampled from the hemisphere with positive y
+            // sample is weighted by cosine of angle between sample and y axis
             // https://cseweb.ucsd.edu/classes/sp17/cse168-a/CSE168_08_PathTracing.pdf
             vec3 cosineWeightedSampleHemisphere(vec2 uv) {
                 float z = uv.x;
@@ -104,6 +105,13 @@ pub mod fs {
                 float phi = 2.0 * M_PI * uv.y;
               
                 return vec3(r * cos(phi), sqrt(z), r * sin(phi));
+            }
+
+            // returns a vector sampled from a triangle and projects it onto the unit sphere
+            // equal area sampling
+            vec3 triangleSample(vec2 uv, vec3 orig, vec3 v0, vec3 v1, vec3 v2) {
+                vec3 bary = vec3(1.0 - uv.x - uv.y, uv.x, uv.y);
+                return normalize(bary.x * (v0-orig) + bary.y * (v1-orig) + bary.z * (v2-orig));
             }
 
             struct IntersectionCoordinateSystem {
@@ -130,13 +138,14 @@ pub mod fs {
             };
 
             IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
-                const float t_min = 0.001;
+                const float t_min = 0.01;
                 const float t_max = 1000.0;
                 rayQueryEXT ray_query;
                 rayQueryInitializeEXT(
                     ray_query,
                     top_level_acceleration_structure,
-                    0,
+                    gl_RayFlagsNoneEXT,
+                    // gl_RayFlagsCullBackFacingTrianglesEXT,
                     0xFF,
                     origin,
                     t_min,
@@ -239,7 +248,7 @@ pub mod fs {
 
                 float scatter_pdf_over_ray_pdf;
                 vec3 reflectivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgb;
-                vec3 emissivity = 50.0*texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
+                vec3 emissivity = 500.0*texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
                 float metallicity = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).r;
 
                 if(floatConstruct(seed) < metallicity) {
@@ -279,8 +288,8 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 4;
+            const uint SAMPLES_PER_PIXEL = 8;
+            const uint MAX_BOUNCES = 2;
 
             void main() {
                 uint pixel_seed = hash(camera.frame) ^ hashFloat(in_uv.x) ^ hashFloat(in_uv.y);

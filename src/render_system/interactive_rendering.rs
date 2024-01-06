@@ -466,6 +466,10 @@ impl Renderer {
         }
     }
 
+    pub fn n_swapchain_images(&self) -> usize {
+        self.attachment_image_views.len()
+    }
+
     pub fn rebuild(&mut self, extent: [u32; 2]) {
         let (new_swapchain, new_images) = self
             .swapchain

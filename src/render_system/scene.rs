@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Debug, sync::Arc};
+use std::{collections::{BTreeMap, VecDeque}, fmt::Debug, sync::Arc};
 
 use nalgebra::{Isometry3, Matrix4};
 use vulkano::{
@@ -43,7 +43,9 @@ pub struct Scene<K, Vertex> {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     objects: BTreeMap<K, Option<Object<Vertex>>>,
-    old_objects: [Vec<Object<Vertex>>; 2],
+    // we have to keep around old objects for n_swapchain_images frames to ensure that the TLAS is not in use
+    old_objects: VecDeque<Vec<Object<Vertex>>>,
+    n_swapchain_images: usize,
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
     cached_instance_vertex_buffer_addresses: Option<Subbuffer<[u64]>>,
@@ -65,6 +67,7 @@ where
         transfer_queue: Arc<Queue>,
         memory_allocator: Arc<dyn MemoryAllocator>,
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+        n_swapchain_images: usize,
     ) -> Scene<K, Vertex> {
         // assert that the vertex type must have a field called position
         assert!(Vertex::per_vertex().members.contains_key("position"));
@@ -82,7 +85,8 @@ where
             command_buffer_allocator,
             memory_allocator,
             objects: BTreeMap::new(),
-            old_objects: [vec![], vec![]],
+            old_objects: VecDeque::from([vec![]]),
+            n_swapchain_images,
             cached_tlas: None,
             cached_instance_vertex_buffer_addresses: None,
             cached_instance_transforms: None,
@@ -148,9 +152,10 @@ where
 
     // SAFETY: after calling this function, any TLAS previously returned by get_tlas() is invalid, and must not in use
     pub unsafe fn dispose_old_objects(&mut self) {
-        // clear old objects
-        self.old_objects[1].clear();
-        self.old_objects.swap(0, 1);
+        self.old_objects.push_front(vec![]);
+        while self.old_objects.len() > self.n_swapchain_images + 10 {
+            self.old_objects.pop_back();
+        }
     }
 
     // the returned TLAS may only be used after the returned future has been waited on
