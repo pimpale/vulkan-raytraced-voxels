@@ -9,6 +9,7 @@ edition = "2021"
 image = "0.24.7"
 nalgebra = "0.32.3"
 noise = "0.8.2"
+partition = "0.1.2"
 rand = "0.8.5"
 rapier3d = "0.17.2"
 serde = { version="1.0.194", features=["derive"] }

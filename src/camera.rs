@@ -152,7 +152,7 @@ impl InteractiveCamera for SphericalCamera {
                 winit::event::WindowEvent::MouseWheel { delta, .. } => {
                     match delta {
                         winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                            self.offset -= 0.1 * y;
+                            self.offset -= 1.0 * y;
                             //if self.offset < 0.5 {
                             //    self.offset = 0.5;
                             //}

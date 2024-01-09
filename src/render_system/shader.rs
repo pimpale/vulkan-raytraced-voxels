@@ -248,7 +248,7 @@ pub mod fs {
 
                 float scatter_pdf_over_ray_pdf;
                 vec3 reflectivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgb;
-                vec3 emissivity = 500.0*texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
+                vec3 emissivity = 100.0*texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
                 float metallicity = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).r;
 
                 if(floatConstruct(seed) < metallicity) {
@@ -288,8 +288,8 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 8;
-            const uint MAX_BOUNCES = 2;
+            const uint SAMPLES_PER_PIXEL = 1;
+            const uint MAX_BOUNCES = 4;
 
             void main() {
                 uint pixel_seed = hash(camera.frame) ^ hashFloat(in_uv.x) ^ hashFloat(in_uv.y);

@@ -19,7 +19,7 @@ use vulkano::{
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
     pipeline::graphics::vertex_input,
-    sync::{future::FenceSignalFuture, GpuFuture},
+    sync::GpuFuture,
     DeviceSize, Packed24_8,
 };
 
