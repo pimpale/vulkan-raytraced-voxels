@@ -103,7 +103,7 @@ pub fn gen_hitbox(blocks: &BlockDefinitionTable, chunk_data: &Vec<BlockIdx>) -> 
     for x in 0..CHUNK_X_SIZE {
         for y in 0..CHUNK_Y_SIZE {
             for z in 0..CHUNK_Z_SIZE {
-                if !blocks.transparent(chunk_data[chunk_idx(x, y, z)]) {
+                if blocks.solid(chunk_data[chunk_idx(x, y, z)]) {
                     let collider = SharedShape::cuboid(0.5, 0.5, 0.5);
                     let position =
                         Isometry3::translation(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
@@ -148,106 +148,48 @@ pub fn gen_mesh<'a>(
     chunk_data: &Vec<BlockIdx>,
     neighboring_chunk_data: NeighboringChunkData<'a>,
 ) -> Vec<Vertex3D> {
-    fn xslice_idx(y: usize, z: usize) -> usize {
-        CHUNK_Z_SIZE * y + z
-    }
-
-    fn yslice_idx(x: usize, z: usize) -> usize {
-        CHUNK_Z_SIZE * x + z
-    }
-
-    fn zslice_idx(x: usize, y: usize) -> usize {
-        CHUNK_Y_SIZE * x + y
-    }
-
-    let mut left_slice = vec![0; CHUNK_Y_SIZE * CHUNK_Z_SIZE];
-    let mut right_slice = vec![0; CHUNK_Y_SIZE * CHUNK_Z_SIZE];
-    let mut down_slice = vec![0; CHUNK_X_SIZE * CHUNK_Z_SIZE];
-    let mut up_slice = vec![0; CHUNK_X_SIZE * CHUNK_Z_SIZE];
-    let mut back_slice = vec![0; CHUNK_X_SIZE * CHUNK_Y_SIZE];
-    let mut front_slice = vec![0; CHUNK_X_SIZE * CHUNK_Y_SIZE];
-
-    for y in 0..CHUNK_Y_SIZE {
-        for z in 0..CHUNK_Z_SIZE {
-            left_slice[xslice_idx(y, z)] =
-                neighboring_chunk_data.left[chunk_idx(CHUNK_X_SIZE - 1, y, z)];
-        }
-    }
-
-    for y in 0..CHUNK_Y_SIZE {
-        for z in 0..CHUNK_Z_SIZE {
-            right_slice[xslice_idx(y, z)] = neighboring_chunk_data.right[chunk_idx(0, y, z)];
-        }
-    }
-
-    for x in 0..CHUNK_X_SIZE {
-        for z in 0..CHUNK_Z_SIZE {
-            down_slice[yslice_idx(x, z)] =
-                neighboring_chunk_data.down[chunk_idx(x, CHUNK_Y_SIZE - 1, z)];
-        }
-    }
-
-    for x in 0..CHUNK_X_SIZE {
-        for z in 0..CHUNK_Z_SIZE {
-            up_slice[yslice_idx(x, z)] = neighboring_chunk_data.up[chunk_idx(x, 0, z)];
-        }
-    }
-
-    for x in 0..CHUNK_X_SIZE {
-        for y in 0..CHUNK_Y_SIZE {
-            back_slice[zslice_idx(x, y)] =
-                neighboring_chunk_data.back[chunk_idx(x, y, CHUNK_Z_SIZE - 1)];
-        }
-    }
-
-    for x in 0..CHUNK_X_SIZE {
-        for y in 0..CHUNK_Y_SIZE {
-            front_slice[zslice_idx(x, y)] = neighboring_chunk_data.front[chunk_idx(x, y, 0)];
-        }
-    }
-
     let mut vertexes = vec![];
 
     for x in 0..CHUNK_X_SIZE {
         for y in 0..CHUNK_Y_SIZE {
             for z in 0..CHUNK_Z_SIZE {
                 let block_idx = chunk_data[chunk_idx(x, y, z)];
-                if blocks.transparent(block_idx) {
+                if blocks.completely_transparent(block_idx) {
                     continue;
                 }
 
                 let left_block_idx = if x == 0 {
-                    left_slice[xslice_idx(y, z)]
+                    neighboring_chunk_data.left[chunk_idx(CHUNK_X_SIZE - 1, y, z)]
                 } else {
                     chunk_data[chunk_idx(x - 1, y, z)]
                 };
 
                 let right_block_idx = if x == CHUNK_X_SIZE - 1 {
-                    right_slice[xslice_idx(y, z)]
+                    neighboring_chunk_data.right[chunk_idx(0, y, z)]
                 } else {
                     chunk_data[chunk_idx(x + 1, y, z)]
                 };
 
                 let down_block_idx = if y == 0 {
-                    down_slice[yslice_idx(x, z)]
+                    neighboring_chunk_data.down[chunk_idx(x, CHUNK_Y_SIZE - 1, z)]
                 } else {
                     chunk_data[chunk_idx(x, y - 1, z)]
                 };
 
                 let up_block_idx = if y == CHUNK_Y_SIZE - 1 {
-                    up_slice[yslice_idx(x, z)]
+                    neighboring_chunk_data.up[chunk_idx(x, 0, z)]
                 } else {
                     chunk_data[chunk_idx(x, y + 1, z)]
                 };
 
                 let back_block_idx = if z == 0 {
-                    back_slice[zslice_idx(x, y)]
+                    neighboring_chunk_data.back[chunk_idx(x, y, CHUNK_Z_SIZE - 1)]
                 } else {
                     chunk_data[chunk_idx(x, y, z - 1)]
                 };
 
                 let front_block_idx = if z == CHUNK_Z_SIZE - 1 {
-                    front_slice[zslice_idx(x, y)]
+                    neighboring_chunk_data.front[chunk_idx(x, y, 0)]
                 } else {
                     chunk_data[chunk_idx(x, y, z + 1)]
                 };
@@ -266,7 +208,7 @@ pub fn gen_mesh<'a>(
                 let v111 = [fx + 1.0, fy + 1.0, fz + 1.0];
 
                 // left face
-                if blocks.transparent(left_block_idx) {
+                if blocks.translucent(left_block_idx) {
                     let t = blocks.get_material_offset(block_idx, BlockFace::LEFT);
                     vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
@@ -277,7 +219,7 @@ pub fn gen_mesh<'a>(
                 }
 
                 // right face
-                if blocks.transparent(right_block_idx) {
+                if blocks.translucent(right_block_idx) {
                     let t = blocks.get_material_offset(block_idx, BlockFace::RIGHT);
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
@@ -288,7 +230,7 @@ pub fn gen_mesh<'a>(
                 }
 
                 // lower face
-                if blocks.transparent(down_block_idx) {
+                if blocks.translucent(down_block_idx) {
                     let t = blocks.get_material_offset(block_idx, BlockFace::DOWN);
                     vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
@@ -299,7 +241,7 @@ pub fn gen_mesh<'a>(
                 }
 
                 // upper face
-                if blocks.transparent(up_block_idx) {
+                if blocks.translucent(up_block_idx) {
                     let t = blocks.get_material_offset(block_idx, BlockFace::UP);
                     vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
@@ -310,7 +252,7 @@ pub fn gen_mesh<'a>(
                 }
 
                 // back face
-                if blocks.transparent(back_block_idx) {
+                if blocks.translucent(back_block_idx) {
                     let t = blocks.get_material_offset(block_idx, BlockFace::BACK);
                     vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
                     vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
@@ -321,7 +263,7 @@ pub fn gen_mesh<'a>(
                 }
 
                 // front face
-                if blocks.transparent(front_block_idx) {
+                if blocks.translucent(front_block_idx) {
                     let t = blocks.get_material_offset(block_idx, BlockFace::FRONT);
                     vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
                     vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));

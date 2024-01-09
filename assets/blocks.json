@@ -1,6 +1,9 @@
 {
     "blocks": {
         "texturetest": {
+            "solid": true,
+            "translucent": true,
+            "luminescent": false,
             "left": {
                 "reflectivity": "./blocks/texturetest/left.reflectivity.png",
                 "emissivity": "./black.png",
@@ -33,6 +36,9 @@
             }
         },
         "grass": {
+            "solid": true,
+            "translucent": false,
+            "luminescent": false,
             "left": {
                 "reflectivity": "./blocks/grass/left.reflectivity.png",
                 "emissivity": "./black.png",
@@ -65,6 +71,9 @@
             }
         },
         "soil": {
+            "solid": true,
+            "translucent": false,
+            "luminescent": false,
             "left": {
                 "reflectivity": "./blocks/soil/left.reflectivity.png",
                 "emissivity": "./black.png",
@@ -97,6 +106,9 @@
             }
         },
         "stone": {
+            "solid": true,
+            "translucent": false,
+            "luminescent": false,
             "left": {
                 "reflectivity": "./blocks/stone/left.reflectivity.png",
                 "emissivity": "./black.png",
@@ -129,6 +141,9 @@
             }
         },
         "lamp": {
+            "solid": true,
+            "translucent": false,
+            "luminescent": true,
             "left": {
                 "reflectivity": "./blocks/lamp/left.reflectivity.png",
                 "emissivity": "./blocks/lamp/left.emissivity.png",
@@ -161,6 +176,9 @@
             }
         },
         "glass": {
+            "solid": true,
+            "translucent": true,
+            "luminescent": false,
             "left": {
                 "reflectivity": "./blocks/glass/left.reflectivity.png",
                 "emissivity": "./black.png",
@@ -193,6 +211,9 @@
             }
         },
         "mirror": {
+            "solid": true,
+            "translucent": false,
+            "luminescent": false,
             "left": {
                 "reflectivity": "./white.png",
                 "emissivity": "./black.png",

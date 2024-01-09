@@ -145,7 +145,6 @@ pub mod fs {
                     ray_query,
                     top_level_acceleration_structure,
                     gl_RayFlagsNoneEXT,
-                    // gl_RayFlagsCullBackFacingTrianglesEXT,
                     0xFF,
                     origin,
                     t_min,
@@ -243,15 +242,25 @@ pub mod fs {
                 }
 
                 vec3 new_origin = info.position;
-
                 vec3 new_direction;
 
-                float scatter_pdf_over_ray_pdf;
-                vec3 reflectivity = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgb;
-                vec3 emissivity = 100.0*texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgb;
-                float metallicity = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).r;
+                // fetch data
+                vec4 tex0 = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgba;
+                vec4 tex1 = texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgba;
+                vec4 tex2 = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).rgba;
 
-                if(floatConstruct(seed) < metallicity) {
+                float scatter_pdf_over_ray_pdf;
+
+                vec3 reflectivity = tex0.rgb;
+                float alpha = tex0.a;
+                vec3 emissivity = 100.0*tex1.rgb;
+                float metallicity = tex2.r;
+
+                // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
+                float scatter_kind_rand = floatConstruct(seed);
+
+
+                if(scatter_kind_rand < metallicity) {
                     // mirror scattering
                     scatter_pdf_over_ray_pdf = 1.0;
 
@@ -259,7 +268,12 @@ pub mod fs {
                         direction,
                         info.hit_coords.normal
                     );
+                } else if (scatter_kind_rand < metallicity + (1.0-alpha)) {
+                    // transmissive scattering
+                    scatter_pdf_over_ray_pdf = 1.0;
 
+                    new_direction = direction;
+                    reflectivity = vec3(1.0);
                 } else {
                     // lambertian scattering
                     reflectivity = reflectivity / M_PI;

@@ -152,12 +152,13 @@ fn find_best_plane(
         for plane in 0..(BINS - 1) {
             primcount_to_left += bin_primcount[plane];
             plane_primcount_to_left[plane] = primcount_to_left;
-            plane_aabb_to_left[plane] = Aabb::union(&aabb_to_left, &bin_bounds[plane]);
+            aabb_to_left = Aabb::union(&aabb_to_left, &bin_bounds[plane]);
+            plane_aabb_to_left[plane] = aabb_to_left;
 
             primcount_to_right += bin_primcount[BINS - 1 - plane];
             plane_primcount_to_right[BINS - 2 - plane] = primcount_to_right;
-            plane_aabb_to_left[plane] =
-                Aabb::union(&aabb_to_right, &bin_bounds[BINS - 1 - plane]);
+            aabb_to_right = Aabb::union(&aabb_to_right, &bin_bounds[BINS - 1 - plane]);
+            plane_aabb_to_right[plane] = aabb_to_right;
         }
 
         let scale = (bounds_max - bounds_min) / BINS as f32;
@@ -305,4 +306,10 @@ where
         &mut nodes,
         &cost_function,
     )
+}
+
+
+// creates a visualization of the blas by turning it into a mesh
+fn create_blas_visualization(blas_nodes: & Vec<BlasNode>) {
+
 }

@@ -1,9 +1,9 @@
 use nalgebra::{Point2, Point3, Vector2, Vector3};
 use rapier3d::geometry::{Collider, ColliderBuilder};
 
-use crate::render_system::vertex::Vertex3D as Vertex;
+use crate::render_system::vertex::Vertex3D;
 
-pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 3]) -> Vec<Vertex> {
+pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 3]) -> Vec<Vertex3D> {
     let points: Vec<Vector3<f32>> = points
         .iter()
         .map(|p| Vector3::new(p[0], p[1], p[2]))
@@ -21,7 +21,7 @@ pub fn polyline(
     normals: Vec<Vector3<f32>>,
     width: Vec<f32>,
     colors: Vec<[f32; 3]>,
-) -> Vec<Vertex> {
+) -> Vec<Vertex3D> {
     assert!(points.len() > 1, "not enough points");
     assert!(
         points.len() == normals.len(),
@@ -72,56 +72,117 @@ pub fn polyline(
         .map(|((v, &w), p)| p + v * w)
         .collect();
 
-    let vertexes: Vec<Vertex> = std::iter::zip(left_points.windows(2), right_points.windows(2))
+    let vertexes: Vec<Vertex3D> = std::iter::zip(left_points.windows(2), right_points.windows(2))
         .zip(colors)
         .flat_map(|((l, r), color)| {
             vec![
-                Vertex::new(r[0].into(), color),
-                Vertex::new(l[1].into(), color),
-                Vertex::new(l[0].into(), color),
-                Vertex::new(r[1].into(), color),
-                Vertex::new(l[1].into(), color),
-                Vertex::new(r[0].into(), color),
+                Vertex3D::new(r[0].into(), color),
+                Vertex3D::new(l[1].into(), color),
+                Vertex3D::new(l[0].into(), color),
+                Vertex3D::new(r[1].into(), color),
+                Vertex3D::new(l[1].into(), color),
+                Vertex3D::new(r[0].into(), color),
             ]
         })
         .collect();
     vertexes
 }
 
-pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex> {
+pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
     let xsize = dims[0] * 0.5;
     let ysize = dims[1] * 0.5;
     let zsize = dims[2] * 0.5;
 
-    let x = loc[0];
-    let y = loc[1];
-    let z = loc[2];
+    let fx = loc[0] - 0.5;
+    let fy = loc[1] - 0.5;
+    let fz = loc[2] - 0.5;
 
-    let lbu = Vertex::new([x - xsize, y + ysize, z - zsize], [0.5, 0.9, 0.9]);
-    let rbu = Vertex::new([x + xsize, y + ysize, z - zsize], [0.5, 0.5, 0.9]);
-    let lfu = Vertex::new([x - xsize, y + ysize, z + zsize], [0.9, 0.5, 0.9]);
-    let rfu = Vertex::new([x + xsize, y + ysize, z + zsize], [0.5, 0.9, 0.9]);
-    let lbl = Vertex::new([x - xsize, y - ysize, z - zsize], [0.5, 0.5, 0.3]);
-    let rbl = Vertex::new([x + xsize, y - ysize, z - zsize], [0.9, 0.5, 0.3]);
-    let lfl = Vertex::new([x - xsize, y - ysize, z + zsize], [0.5, 0.5, 0.3]);
-    let rfl = Vertex::new([x + xsize, y - ysize, z + zsize], [0.0, 0.0, 0.3]);
+    let v000 = [fx + 0.0, fy + 0.0, fz + 0.0];
+    let v100 = [fx + 1.0, fy + 0.0, fz + 0.0];
+    let v001 = [fx + 0.0, fy + 0.0, fz + 1.0];
+    let v101 = [fx + 1.0, fy + 0.0, fz + 1.0];
+    let v010 = [fx + 0.0, fy + 1.0, fz + 0.0];
+    let v110 = [fx + 1.0, fy + 1.0, fz + 0.0];
+    let v011 = [fx + 0.0, fy + 1.0, fz + 1.0];
+    let v111 = [fx + 1.0, fy + 1.0, fz + 1.0];
 
-    vec![
-        lbu, rbu, lfu, lfu, rfu, rbu, // upper square
-        lbl, rbl, lfl, lfl, rfl, rbl, // lower square
-        lfu, rfu, lfl, lfl, rfl, rfu, // front square
-        lbu, rbu, lbl, lbl, rbl, rbu, // back square
-        lbu, lfu, lbl, lbl, lfl, lfu, // left square
-        rbu, rfu, rbl, rbl, rfl, rfu, // right square
-    ]
+    let mut vertexes = vec![];
+
+    // left face
+    {
+        let t = 0;
+        vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v011, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+    }
+
+    // right face
+    {
+        let t = 1;
+        vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v111, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+    }
+
+    // lower face
+    {
+        let t = 2;
+        vertexes.push(Vertex3D::new2(v000, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v100, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+    }
+
+    // upper face
+    {
+        let t = 3;
+        vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v011, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v111, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+    }
+
+    // back face
+    {
+        let t = 4;
+        vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v000, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v010, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v110, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v100, t, [1.0, 1.0]));
+    }
+
+    // front face
+    {
+        let t = 5;
+        vertexes.push(Vertex3D::new2(v001, t, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v101, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v111, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v011, t, [1.0, 0.0]));
+    }
+
+    vertexes
 }
 
-pub fn unitcube() -> Vec<Vertex> {
+pub fn unitcube() -> Vec<Vertex3D> {
     cuboid(Point3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 1.0))
 }
 
 // get axis aligned bounding box
-pub fn get_aabb(obj: &[Vertex]) -> Vector3<f32> {
+pub fn get_aabb(obj: &[Vertex3D]) -> Vector3<f32> {
     let mut min = Vector3::new(std::f32::MAX, std::f32::MAX, std::f32::MAX);
     let mut max = Vector3::new(std::f32::MIN, std::f32::MIN, std::f32::MIN);
     for v in obj.iter() {
@@ -147,7 +208,7 @@ pub fn get_aabb(obj: &[Vertex]) -> Vector3<f32> {
     max - min
 }
 
-pub fn get_aabb_hitbox(obj: &[Vertex]) -> Collider {
+pub fn get_aabb_hitbox(obj: &[Vertex3D]) -> Collider {
     let dims = get_aabb(obj);
     // cuboid uses half-extents, so we divide by 2
     ColliderBuilder::cuboid(dims[0] / 2.0, dims[1] / 2.0, dims[2] / 2.0).build()

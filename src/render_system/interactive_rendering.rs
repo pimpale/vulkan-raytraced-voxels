@@ -325,14 +325,13 @@ impl Renderer {
         command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
         memory_allocator: Arc<StandardMemoryAllocator>,
         descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-        texture_atlas: Vec<(RgbImage, RgbImage, RgbImage)>,
+        texture_atlas: Vec<(RgbaImage, RgbaImage, RgbaImage)>,
     ) -> Renderer {
         let texture_atlas = texture_atlas
             .into_iter()
             .flat_map(|(reflectivity, emissivity, metallicity)| {
                 [reflectivity, emissivity, metallicity]
             })
-            .map(|image| DynamicImage::ImageRgb8(image).to_rgba8())
             .collect::<Vec<_>>();
 
         let device = memory_allocator.device().clone();

@@ -404,7 +404,7 @@ impl InnerChunkManager {
 
             let block = self.get_block(&loc_quantized);
             if let Some(block) = block {
-                if !self.worldgen_data.block_definition_table.transparent(block) {
+                if self.worldgen_data.block_definition_table.solid(block) {
                     let last_loc_quantized = chunk::floor_coords((loc - direction).into());
                     let delta = loc_quantized - last_loc_quantized;
                     let face = if delta[0] == -1 {

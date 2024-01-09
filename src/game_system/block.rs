@@ -4,7 +4,7 @@ use std::{
     fmt::Display,
 };
 
-use image::RgbImage;
+use image::RgbaImage;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BlockFace {
@@ -41,6 +41,9 @@ pub struct TextureDefinition {
 
 #[derive(Deserialize)]
 pub struct BlockJson {
+    pub solid: bool,
+    pub translucent: bool,
+    pub luminescent: bool,
     pub left: TextureDefinition,
     pub right: TextureDefinition,
     pub down: TextureDefinition,
@@ -55,6 +58,7 @@ pub struct BlocksJson {
 }
 
 pub struct BlockDefinitionTable {
+    blocks: Vec<BlockJson>,
     block_textures_offset: usize,
     block_lookup: HashMap<String, BlockIdx>,
 }
@@ -65,7 +69,7 @@ impl BlockDefinitionTable {
     // appends block textures to current_texture_atlas
     pub fn load_assets(
         assets_path: &str,
-        current_texture_atlas: &mut Vec<(RgbImage, RgbImage, RgbImage)>,
+        current_texture_atlas: &mut Vec<(RgbaImage, RgbaImage, RgbaImage)>,
     ) -> BlockDefinitionTable {
         let block_textures_offset = current_texture_atlas.len();
 
@@ -75,16 +79,16 @@ impl BlockDefinitionTable {
                 .unwrap();
 
         let mut block_lookup = HashMap::new();
-        block_lookup.insert("air".to_string(), blocks_json.blocks.len() as BlockIdx);
+        let mut blocks = vec![];
 
         for (idx, (name, block)) in blocks_json.blocks.into_iter().enumerate() {
             let mut load_texture = |tex: &TextureDefinition| {
                 let reflectivity_path = format!("{}/{}", assets_path, tex.reflectivity);
-                let reflectivity = image::open(reflectivity_path).unwrap().to_rgb8();
+                let reflectivity = image::open(reflectivity_path).unwrap().to_rgba8();
                 let emissivity_path = format!("{}/{}", assets_path, tex.emissivity);
-                let emissivity = image::open(emissivity_path).unwrap().to_rgb8();
+                let emissivity = image::open(emissivity_path).unwrap().to_rgba8();
                 let metallicity_path = format!("{}/{}", assets_path, tex.metallicity);
-                let metallicity = image::open(metallicity_path).unwrap().to_rgb8();
+                let metallicity = image::open(metallicity_path).unwrap().to_rgba8();
                 current_texture_atlas.push((reflectivity, emissivity, metallicity));
             };
 
@@ -95,10 +99,15 @@ impl BlockDefinitionTable {
             load_texture(&block.back);
             load_texture(&block.front);
 
+            blocks.push(block);
             block_lookup.insert(name, idx as BlockIdx);
         }
 
+        // add air
+        block_lookup.insert("air".to_string(), blocks.len() as BlockIdx);
+
         BlockDefinitionTable {
+            blocks,
             block_textures_offset,
             block_lookup,
         }
@@ -109,8 +118,20 @@ impl BlockDefinitionTable {
         texture_idx as u32
     }
 
-    pub fn transparent(&self, block_idx: BlockIdx) -> bool {
-        block_idx == self.block_lookup.len() as BlockIdx - 1
+    pub fn completely_transparent(&self, block_idx: BlockIdx) -> bool {
+        block_idx as usize == self.blocks.len()
+    }
+
+    pub fn translucent(&self, block_idx: BlockIdx) -> bool {
+        self.completely_transparent(block_idx) || self.blocks[block_idx as usize].translucent
+    }
+
+    pub fn solid(&self, block_idx: BlockIdx) -> bool {
+        !self.completely_transparent(block_idx) && self.blocks[block_idx as usize].solid
+    }
+
+    pub fn luminescent(&self, block_idx: BlockIdx) -> bool {
+        !self.completely_transparent(block_idx) && self.blocks[block_idx as usize].luminescent
     }
 
     pub fn block_idx(&self, name: &str) -> Option<BlockIdx> {
