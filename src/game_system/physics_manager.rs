@@ -2,15 +2,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use nalgebra::UnitVector3;
 use nalgebra::Vector3;
-use rapier3d::control::EffectiveCharacterMovement;
-use rapier3d::control::KinematicCharacterController;
+
 use rapier3d::dynamics::CCDSolver;
 use rapier3d::dynamics::ImpulseJointSet;
 use rapier3d::dynamics::IntegrationParameters;
 use rapier3d::dynamics::IslandManager;
-use rapier3d::dynamics::LockedAxes;
 use rapier3d::dynamics::MultibodyJointSet;
 use rapier3d::dynamics::RigidBody;
 use rapier3d::dynamics::RigidBodyBuilder;
@@ -29,7 +26,6 @@ use crate::game_system::game_world::EntityCreationData;
 use crate::game_system::game_world::EntityPhysicsData;
 use crate::game_system::game_world::WorldChange;
 
-use super::game_world::Entity;
 use super::manager::Manager;
 use super::manager::UpdateData;
 
@@ -349,8 +345,10 @@ impl Manager for PhysicsManager {
                         }
                         let should_be_grounded = *grounded && !*clipping;
                         if physics_data.grounded != should_be_grounded {
-                            changes
-                                .push(WorldChange::GlobalEntityUpdateGroundedness(*id, should_be_grounded));
+                            changes.push(WorldChange::GlobalEntityUpdateGroundedness(
+                                *id,
+                                should_be_grounded,
+                            ));
                         }
                     }
                     changes

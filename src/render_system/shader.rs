@@ -321,7 +321,7 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 2;
+            const uint SAMPLES_PER_PIXEL = 1;
             const uint MAX_BOUNCES = 16;
 
             void main() {
