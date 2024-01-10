@@ -89,22 +89,18 @@ pub fn polyline(
 }
 
 pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
-    let xsize = dims[0] * 0.5;
-    let ysize = dims[1] * 0.5;
-    let zsize = dims[2] * 0.5;
-
-    let fx = loc[0] - 0.5;
-    let fy = loc[1] - 0.5;
-    let fz = loc[2] - 0.5;
+    let fx = loc[0] - 0.5*dims[0];
+    let fy = loc[1] - 0.5*dims[1];
+    let fz = loc[2] - 0.5*dims[2];
 
     let v000 = [fx + 0.0, fy + 0.0, fz + 0.0];
-    let v100 = [fx + 1.0, fy + 0.0, fz + 0.0];
-    let v001 = [fx + 0.0, fy + 0.0, fz + 1.0];
-    let v101 = [fx + 1.0, fy + 0.0, fz + 1.0];
-    let v010 = [fx + 0.0, fy + 1.0, fz + 0.0];
-    let v110 = [fx + 1.0, fy + 1.0, fz + 0.0];
-    let v011 = [fx + 0.0, fy + 1.0, fz + 1.0];
-    let v111 = [fx + 1.0, fy + 1.0, fz + 1.0];
+    let v100 = [fx + dims[0], fy + 0.0, fz + 0.0];
+    let v001 = [fx + 0.0, fy + 0.0, fz + dims[2]];
+    let v101 = [fx + dims[0], fy + 0.0, fz + dims[2]];
+    let v010 = [fx + 0.0, fy + dims[1], fz + 0.0];
+    let v110 = [fx + dims[0], fy + dims[1], fz + 0.0];
+    let v011 = [fx + 0.0, fy + dims[1], fz + dims[2]];
+    let v111 = [fx + dims[0], fy + dims[1], fz + dims[2]];
 
     let mut vertexes = vec![];
 

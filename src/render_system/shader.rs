@@ -55,6 +55,25 @@ pub mod fs {
                 mat4 instance_transforms[];
             };
 
+
+            // struct LightBvhNode {
+            //     vec3 position;
+            //     float totalEmissivePower;
+            //     bool leaf;
+            //     uint left_child;
+            //     uint right_child;
+            //     bool has_right_primitive;
+            //     uint left_primitive_instance_index;
+            //     uint left_primitive_index;
+            //     uint right_primitive_instance_index;
+            //     uint right_primitive_index;
+            // };
+
+            // layout(set = 1, binding = 3, scalar) readonly buffer LightBvh {
+            //     LightBvhNode nodes[];
+            // };
+
+
             layout(push_constant, scalar) uniform Camera {
                 vec3 eye;
                 vec3 front;
@@ -302,8 +321,8 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 4;
+            const uint SAMPLES_PER_PIXEL = 2;
+            const uint MAX_BOUNCES = 16;
 
             void main() {
                 uint pixel_seed = hash(camera.frame) ^ hashFloat(in_uv.x) ^ hashFloat(in_uv.y);

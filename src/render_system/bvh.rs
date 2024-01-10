@@ -1,4 +1,8 @@
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
+
+use crate::utils;
+
+use super::{shader::fs::Vertex, vertex::Vertex3D};
 
 trait Primitive {
     fn aabb(&self) -> Aabb;
@@ -50,6 +54,13 @@ impl Aabb {
         }
     }
 
+    fn diagonal(&self) -> Vector3<f32> {
+        match self {
+            Aabb::Empty => Vector3::zeros(),
+            Aabb::NonEmpty { min, max } => max - min,
+        }
+    }
+
     fn area(&self) -> f32 {
         match self {
             Aabb::Empty => 0.0,
@@ -89,7 +100,7 @@ struct BlasNode {
 fn blas_leaf_bounds(leaf: &BlasLeaf, prim_idxs: &Vec<usize>, prim_aabbs: &Vec<Aabb>) -> Aabb {
     let mut bound = Aabb::Empty;
     for i in leaf.first_prim_idx_idx..(leaf.first_prim_idx_idx + leaf.prim_count) {
-        let prim_aabb = prim_aabbs[prim_idxs[leaf.first_prim_idx_idx]];
+        let prim_aabb = prim_aabbs[prim_idxs[i]];
         bound = Aabb::union(&bound, &prim_aabb);
     }
     bound
@@ -102,7 +113,7 @@ fn find_best_plane(
     prim_aabbs: &Vec<Aabb>,
     cost_function: &impl Fn(&Aabb, &Aabb, usize, usize) -> f32,
 ) -> (usize, f32) {
-    const BINS: usize = 16;
+    const BINS: usize = 32;
 
     let mut best_cost = f32::MAX;
     let mut best_dimension = 0;
@@ -158,7 +169,7 @@ fn find_best_plane(
             primcount_to_right += bin_primcount[BINS - 1 - plane];
             plane_primcount_to_right[BINS - 2 - plane] = primcount_to_right;
             aabb_to_right = Aabb::union(&aabb_to_right, &bin_bounds[BINS - 1 - plane]);
-            plane_aabb_to_right[plane] = aabb_to_right;
+            plane_aabb_to_right[BINS - 2 - plane] = aabb_to_right;
         }
 
         let scale = (bounds_max - bounds_min) / BINS as f32;
@@ -170,6 +181,7 @@ fn find_best_plane(
                 plane_primcount_to_left[plane],
                 plane_primcount_to_right[plane],
             );
+            dbg!(best_cost, cost);
             if cost < best_cost {
                 best_cost = cost;
                 best_dimension = dimension;
@@ -177,7 +189,6 @@ fn find_best_plane(
             }
         }
     }
-
     (best_dimension, best_split_pos)
 }
 
@@ -268,7 +279,7 @@ fn insert_blas_leaf_node(
     node_idx
 }
 
-fn build_blas<T>(primitives: Vec<T>)
+fn build_blas<T>(primitives: Vec<T>) -> Vec<BlasNode>
 where
     T: Primitive,
 {
@@ -289,12 +300,8 @@ where
         &prim_aabbs,
     );
 
-    fn cost_function(
-        aabb1: &Aabb,
-        aabb2: &Aabb,
-        count1: usize,
-        count2: usize,
-    ) -> f32 {
+    // surface area metric
+    fn cost_function(aabb1: &Aabb, aabb2: &Aabb, count1: usize, count2: usize) -> f32 {
         aabb1.area() * count1 as f32 + aabb2.area() * count2 as f32
     }
 
@@ -305,11 +312,64 @@ where
         &prim_centroids,
         &mut nodes,
         &cost_function,
-    )
+    );
+
+    nodes
 }
 
-
 // creates a visualization of the blas by turning it into a mesh
-fn create_blas_visualization(blas_nodes: & Vec<BlasNode>) {
+fn create_blas_visualization(blas_nodes: &Vec<BlasNode>) -> Vec<Vertex3D> {
+    fn create_blas_visualization_inner(
+        node_idx: usize,
+        blas_nodes: &Vec<BlasNode>,
+        vertexes: &mut Vec<Vertex3D>,
+    ) {
+        // insert aabb into vertexes
+        let aabb = blas_nodes[node_idx].aabb;
+        match aabb {
+            Aabb::Empty => {}
+            Aabb::NonEmpty { min, max } => {
+                let loc = Point3::from((min.coords + max.coords) / 2.0);
+                let dims = max - min;
+                vertexes.extend(utils::cuboid(loc, dims));
+            }
+        }
 
+        match blas_nodes[node_idx].kind {
+            BlasNodeKind::Leaf(_) => {}
+            BlasNodeKind::InternalNode(ref internal_node) => {
+                create_blas_visualization_inner(internal_node.left_child_idx, blas_nodes, vertexes);
+                create_blas_visualization_inner(
+                    internal_node.right_child_idx,
+                    blas_nodes,
+                    vertexes,
+                );
+            }
+        }
+    }
+
+    let mut vertexes = vec![];
+    create_blas_visualization_inner(0, blas_nodes, &mut vertexes);
+
+    vertexes
+}
+
+pub fn test_blas() -> Vec<Vertex3D> {
+    let mut primitives = vec![];
+    for i in 0..100 {
+        // find a random point
+        let x = rand::random::<f32>() * 40.0 - 20.0;
+        let y = rand::random::<f32>() * 40.0 - 20.0;
+        let z = rand::random::<f32>() * 40.0 - 20.0;
+
+        let v0 = Point3::new(x, y, z);
+        let v1 = Point3::new(x, y + 0.1, z);
+        let v2 = Point3::new(x, y, z + 0.1);
+
+        primitives.push(Triangle { v0, v1, v2 });
+    }
+
+    let nodes = build_blas(primitives);
+
+    create_blas_visualization(&nodes)
 }
