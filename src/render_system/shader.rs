@@ -83,19 +83,6 @@ pub mod fs {
                 uint frame;
             } camera;
 
-            // A single iteration of Bob Jenkins' One-At-A-Time hashing algorithm.
-            uint hash( uint x ) {
-                x += ( x << 10u );
-                x ^= ( x >>  6u );
-                x += ( x <<  3u );
-                x ^= ( x >> 11u );
-                x += ( x << 15u );
-                return x;
-            }
-
-            uint hashFloat(float x) {
-                return hash(floatBitsToUint(x));
-            }
 
             // source: https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
             // Construct a float with half-open range [0:1] using low 23 bits.
@@ -111,10 +98,40 @@ pub mod fs {
                 return f - 1.0;                        // Range [0:1]
             }
 
-            vec2 randVec2(uint seed) {
-                return vec2(floatConstruct(hash(seed)), floatConstruct(hash(seed+1)));
+            // accepts a seed, h, and a 32 bit integer, k, and returns a 32 bit integer
+            // corresponds to the loop in the murmur3 hash algorithm
+            // the output should be passed to murmur3_finalize before being used
+            uint murmur3_combine(uint h, uint k) {
+                // murmur3_32_scramble
+                k *= 0xcc9e2d51;
+                k = (k << 15) | (k >> 17);
+                k *= 0x1b873593;
+
+                h ^= k;
+                h = (h << 13) | (h >> 19);
+                h = h * 5 + 0xe6546b64;
+                return h;
             }
-              
+
+            // accepts a seed, h and returns a random 32 bit integer
+            // corresponds to the last part of the murmur3 hash algorithm
+            uint murmur3_finalize(uint h) {
+                h ^= h >> 16;
+                h *= 0x85ebca6b;
+                h ^= h >> 13;
+                h *= 0xc2b2ae35;
+                h ^= h >> 16;
+                return h;
+            }
+
+            uint murmur3_combinef(uint h, float k) {
+                return murmur3_combine(h, floatBitsToUint(k));
+            }
+
+            float murmur3_finalizef(uint h) {
+                return floatConstruct(murmur3_finalize(h));
+            }
+
             // returns a vector sampled from the hemisphere with positive y
             // sample is weighted by cosine of angle between sample and y axis
             // https://cseweb.ucsd.edu/classes/sp17/cse168-a/CSE168_08_PathTracing.pdf
@@ -146,7 +163,6 @@ pub mod fs {
                 vec3 hemsam = cosineWeightedSampleHemisphere(uv);
                 return normalize(hemsam.x * ics.tangent + hemsam.y * ics.normal + hemsam.z * ics.bitangent);
             }
-
 
             struct IntersectionInfo {
                 IntersectionCoordinateSystem hit_coords;
@@ -276,8 +292,7 @@ pub mod fs {
                 float metallicity = tex2.r;
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
-                float scatter_kind_rand = floatConstruct(seed);
-
+                float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
 
                 if(scatter_kind_rand < metallicity) {
                     // mirror scattering
@@ -300,7 +315,10 @@ pub mod fs {
                     // cosine weighted hemisphere sample
                     new_direction = alignedCosineWeightedSampleHemisphere(
                         // random uv
-                        randVec2(seed),
+                        vec2(
+                            murmur3_finalizef(murmur3_combine(seed, 1)),
+                            murmur3_finalizef(murmur3_combine(seed, 2))
+                        ),
                         // align it with the normal of the object we hit
                         info.hit_coords
                     );
@@ -325,7 +343,9 @@ pub mod fs {
             const uint MAX_BOUNCES = 16;
 
             void main() {
-                uint pixel_seed = hash(camera.frame) ^ hashFloat(in_uv.x) ^ hashFloat(in_uv.y);
+                uint pixel_seed = camera.frame;
+                pixel_seed = murmur3_combinef(pixel_seed, in_uv.x);
+                pixel_seed = murmur3_combinef(pixel_seed, in_uv.y);
     
                 vec3 bounce_emissivity[MAX_BOUNCES];
                 vec3 bounce_reflectivity[MAX_BOUNCES];
@@ -340,7 +360,7 @@ pub mod fs {
 
                 vec3 color = vec3(0.0);
                 for (uint sample_id = 0; sample_id < SAMPLES_PER_PIXEL; sample_id++) {
-                    uint sample_seed = pixel_seed ^ hash(sample_id);
+                    uint sample_seed = murmur3_combine(pixel_seed, sample_id);
                     // store first bounce data
                     BounceInfo bounce_info = doBounce(first_origin, first_direction, first_intersection_info, sample_seed);
                     bounce_emissivity[0] = bounce_info.emissivity;
@@ -353,7 +373,7 @@ pub mod fs {
                     uint current_bounce;
                     for (current_bounce = 1; current_bounce < MAX_BOUNCES; current_bounce++) {
                         IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
-                        bounce_info = doBounce(origin, direction, intersection_info, sample_seed ^ hash(current_bounce));
+                        bounce_info = doBounce(origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
                         bounce_emissivity[current_bounce] = bounce_info.emissivity;
                         bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                         bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
