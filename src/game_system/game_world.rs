@@ -249,13 +249,20 @@ impl GameWorld {
         self.changes_since_last_step = new_changes;
 
         // render to screen
-        let (eye, front, right, up) = self.camera.borrow().eye_front_right_up();
+        let ((eye, front, right, up), rendering_preferences) = {
+            let camera = self.camera.borrow();
+            (
+                camera.eye_front_right_up(),
+                camera.rendering_preferences(),
+            )
+        };
         let (
             top_level_acceleration_structure,
             instance_vertex_buffer_addresses,
             instance_transforms,
             build_future,
         ) = self.scene.borrow_mut().get_tlas();
+        
         // render to screen
         self.renderer.render(
             build_future,
@@ -266,6 +273,7 @@ impl GameWorld {
             front,
             right,
             up,
+            rendering_preferences.samples,
         );
 
         // at this point we can now garbage collect removed entities from the last step (but not this step yet!)

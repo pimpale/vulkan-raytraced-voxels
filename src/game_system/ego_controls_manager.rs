@@ -4,8 +4,10 @@ use nalgebra::{Point3, Vector3};
 use rapier3d::{dynamics::RigidBodyType, math::AngularInertia};
 
 use crate::{
-    camera::InteractiveCamera, game_system::game_world::WorldChange,
-    handle_user_input::UserInputState, utils,
+    camera::{InteractiveCamera, RenderingPreferences},
+    game_system::game_world::WorldChange,
+    handle_user_input::UserInputState,
+    utils,
 };
 
 use super::{
@@ -93,6 +95,21 @@ impl Manager for EgoControlsManager {
         camera.set_root_position(ego.isometry.translation.vector.clone().cast().into());
         camera.set_root_rotation(ego.isometry.rotation.clone().cast().into());
         camera.handle_event(extent, window_events);
+        if UserInputState::key_pressed(window_events, winit::event::VirtualKeyCode::R) {
+            let current_prefs = camera.rendering_preferences();
+            let new_samples = match current_prefs.samples {
+                1 => 2,
+                2 => 4,
+                4 => 8,
+                8 => 16,
+                16 => 32,
+                32 => 64,
+                _ => 1,
+            };
+            camera.set_rendering_preferences(RenderingPreferences {
+                samples: new_samples,
+            });
+        }
 
         let (cam_eye, cam_front, cam_right, cam_up) = camera.eye_front_right_up();
 

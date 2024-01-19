@@ -81,6 +81,7 @@ pub mod fs {
                 vec3 right;
                 float aspect;
                 uint frame;
+                uint samples;
             } camera;
 
 
@@ -288,7 +289,7 @@ pub mod fs {
 
                 vec3 reflectivity = tex0.rgb;
                 float alpha = tex0.a;
-                vec3 emissivity = 100.0*tex1.rgb;
+                vec3 emissivity = 500.0*tex1.rgb;
                 float metallicity = tex2.r;
 
                 // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -339,10 +340,12 @@ pub mod fs {
                 );
             }
 
-            const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 16;
+            //const uint SAMPLES_PER_PIXEL = 1;
+            const uint MAX_BOUNCES = 5;
 
             void main() {
+                uint SAMPLES_PER_PIXEL = camera.samples;
+                
                 uint pixel_seed = camera.frame;
                 pixel_seed = murmur3_combinef(pixel_seed, in_uv.x);
                 pixel_seed = murmur3_combinef(pixel_seed, in_uv.y);

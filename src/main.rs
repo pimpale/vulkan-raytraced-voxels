@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use game_system::game_world::{EntityCreationData, EntityPhysicsData, GameWorld};
-use nalgebra::{Isometry3, Vector3};
+use nalgebra::{Isometry3, Vector3, Point3};
 use rapier3d::{dynamics::RigidBodyType, geometry::ColliderBuilder};
 
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -31,7 +31,7 @@ fn build_scene(
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     surface: Arc<Surface>,
 ) -> GameWorld {
-    let rd = vec![
+    let rd: Vec<Point3<f32>> = vec![
         [0.0, 0.0, 0.0].into(),
         [1.0, 0.0, 0.0].into(),
         [2.0, 0.0, 0.0].into(),
@@ -65,7 +65,7 @@ fn build_scene(
         [15.0, 0.0, 15.0].into(),
     ];
 
-    let g = vec![[0.0, -0.1, -50.0].into(), [0.0, -0.1, 50.0].into()];
+    let g: Vec<Point3<f32>> = vec![[0.0, -0.1, -50.0].into(), [0.0, -0.1, 50.0].into()];
 
     let mut world = GameWorld::new(
         general_queue,
@@ -97,47 +97,47 @@ fn build_scene(
         },
     );
 
-    // add road
-    world.add_entity(
-        1,
-        EntityCreationData {
-            physics: None,
-            mesh: utils::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
-            isometry: Isometry3::identity(),
-        },
-    );
+    // // add road
+    // world.add_entity(
+    //     1,
+    //     EntityCreationData {
+    //         physics: None,
+    //         mesh: utils::flat_polyline(rd.clone(), 1.0, [0.5, 0.5, 0.5]),
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
 
-    // add road yellow line
-    world.add_entity(
-        2,
-        EntityCreationData {
-            physics: None,
-            mesh: utils::flat_polyline(
-                rd.iter().map(|v| v + Vector3::new(0.0, 0.1, 0.0)).collect(),
-                0.1,
-                [1.0, 1.0, 0.0],
-            ),
-            isometry: Isometry3::identity(),
-        },
-    );
+    // // add road yellow line
+    // world.add_entity(
+    //     2,
+    //     EntityCreationData {
+    //         physics: None,
+    //         mesh: utils::flat_polyline(
+    //             rd.iter().map(|v| v + Vector3::new(0.0, 0.1, 0.0)).collect(),
+    //             0.1,
+    //             [1.0, 1.0, 0.0],
+    //         ),
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
 
-    // add ground
-    let ground_mesh = utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]);
-    world.add_entity(
-        3,
-        EntityCreationData {
-            physics: Some(EntityPhysicsData {
-                rigid_body_type: rapier3d::dynamics::RigidBodyType::Fixed,
-                hitbox: utils::get_aabb_hitbox(&ground_mesh),
-                linvel: Vector3::zeros(),
-                angvel: Vector3::zeros(),
-                controlled: false,
-                grounded: false,
-            }),
-            mesh: ground_mesh,
-            isometry: Isometry3::identity(),
-        },
-    );
+    // // add ground
+    // let ground_mesh = utils::flat_polyline(g.clone(), 50.0, [0.5, 1.0, 0.5]);
+    // world.add_entity(
+    //     3,
+    //     EntityCreationData {
+    //         physics: Some(EntityPhysicsData {
+    //             rigid_body_type: rapier3d::dynamics::RigidBodyType::Fixed,
+    //             hitbox: utils::get_aabb_hitbox(&ground_mesh),
+    //             linvel: Vector3::zeros(),
+    //             angvel: Vector3::zeros(),
+    //             controlled: false,
+    //             grounded: false,
+    //         }),
+    //         mesh: ground_mesh,
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
 
     // // add ground
     // let blas_test_mesh = render_system::bvh::test_blas();

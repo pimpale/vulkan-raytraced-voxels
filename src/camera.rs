@@ -34,8 +34,15 @@ impl DirVecs {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct RenderingPreferences {
+    pub samples: u32, 
+}
+
 pub trait Camera {
     fn eye_front_right_up(&self) -> (Point3<f32>, Vector3<f32>, Vector3<f32>, Vector3<f32>);
+    fn rendering_preferences(&self) -> RenderingPreferences;
+    fn set_rendering_preferences(&mut self, prefs: RenderingPreferences);
     fn set_root_position(&mut self, pos: Point3<f32>);
     fn set_root_rotation(&mut self, rot: UnitQuaternion<f32>);
 }
@@ -60,6 +67,9 @@ pub struct SphericalCamera {
     // yaw
     yaw: f32,
 
+    // rendering preferences
+    rendering_preferences: RenderingPreferences,
+
     // contains mouse data (if being dragged)
     mouse_down: bool,
     mouse_start: Point2<f32>,
@@ -80,6 +90,9 @@ impl SphericalCamera {
             mouse_start: Default::default(),
             mouse_prev: Default::default(),
             mouse_curr: Default::default(),
+            rendering_preferences: RenderingPreferences {
+                samples: 1,
+            },
         }
     }
 }
@@ -93,6 +106,14 @@ impl Camera for SphericalCamera {
         let up = self.root_rot * vecs.up;
         let eye = self.root_pos - self.offset * front;
         (eye, front, right, up)
+    }
+
+    fn rendering_preferences(&self) -> RenderingPreferences {
+        self.rendering_preferences.clone()
+    }
+
+    fn set_rendering_preferences(&mut self, prefs: RenderingPreferences) {
+        self.rendering_preferences = prefs;
     }
 
     fn set_root_position(&mut self, pos: Point3<f32>) {

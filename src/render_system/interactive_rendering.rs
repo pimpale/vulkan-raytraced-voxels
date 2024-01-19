@@ -495,6 +495,7 @@ impl Renderer {
         front: Vector3<f32>,
         right: Vector3<f32>,
         up: Vector3<f32>,
+        samples: u32,
     ) {
         // Do not draw frame when screen dimensions are zero.
         // On Windows, this can occur from minimizing the application.
@@ -587,6 +588,7 @@ impl Renderer {
                     up: up.into(),
                     aspect: extent[0] as f32 / extent[1] as f32,
                     frame: self.frame_count,
+                    samples,
                 },
             )
             .unwrap()
