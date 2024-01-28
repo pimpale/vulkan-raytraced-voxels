@@ -71,7 +71,7 @@ fn build_scene(
         general_queue,
         transfer_queue,
         command_buffer_allocator,
-        memory_allocator,
+        memory_allocator.clone(),
         descriptor_set_allocator,
         0,
         surface,
@@ -92,7 +92,10 @@ fn build_scene(
                 controlled: true,
                 grounded: false,
             }),
-            mesh: ego_mesh,
+            mesh: render_system::scene::upload_object(
+                memory_allocator.clone(),
+                &utils::unitcube()
+            ),
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
         },
     );

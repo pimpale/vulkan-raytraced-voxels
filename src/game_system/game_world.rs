@@ -28,6 +28,7 @@ use crate::game_system::physics_manager::PhysicsManager;
 use crate::game_system::scene_manager::SceneManager;
 use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
+use crate::render_system::scene::SceneUploadedObjectHandle;
 use crate::render_system::vertex::Vertex3D;
 
 #[derive(Clone)]
@@ -43,8 +44,8 @@ pub struct EntityPhysicsData {
 pub struct EntityCreationData {
     // if not specified then the object is visual only
     pub physics: Option<EntityPhysicsData>,
-    // mesh (untransformed)
-    pub mesh: Vec<Vertex3D>,
+    // scene object handle
+    pub mesh: SceneUploadedObjectHandle<Vertex3D>,
     // initial transformation
     // position and rotation in space
     pub isometry: Isometry3<f32>,
@@ -52,7 +53,7 @@ pub struct EntityCreationData {
 
 pub struct Entity {
     // mesh (untransformed)
-    pub mesh: Vec<Vertex3D>,
+    pub mesh: SceneUploadedObjectHandle<Vertex3D>,
     // transformation from origin
     pub isometry: Isometry3<f32>,
     // physics
@@ -144,7 +145,8 @@ impl GameWorld {
 
         let camera = Rc::new(RefCell::new(camera));
 
-        let (chunk_manager, chunk_querier) = ChunkManager::new(threadpool, 0, block_table.clone());
+        let (chunk_manager, chunk_querier) =
+            ChunkManager::new(threadpool, memory_allocator.clone(), 0, block_table.clone());
 
         let physics_manager = PhysicsManager::new();
 
@@ -251,10 +253,7 @@ impl GameWorld {
         // render to screen
         let ((eye, front, right, up), rendering_preferences) = {
             let camera = self.camera.borrow();
-            (
-                camera.eye_front_right_up(),
-                camera.rendering_preferences(),
-            )
+            (camera.eye_front_right_up(), camera.rendering_preferences())
         };
         let (
             top_level_acceleration_structure,
@@ -262,7 +261,7 @@ impl GameWorld {
             instance_transforms,
             build_future,
         ) = self.scene.borrow_mut().get_tlas();
-        
+
         // render to screen
         self.renderer.render(
             build_future,

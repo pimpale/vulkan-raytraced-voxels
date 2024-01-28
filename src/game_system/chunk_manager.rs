@@ -13,10 +13,11 @@ use nalgebra::{Isometry3, Point3, Vector3};
 use noise::{NoiseFn, OpenSimplex};
 use rapier3d::{dynamics::RigidBodyType, geometry::Collider};
 use threadpool::ThreadPool;
+use vulkano::memory::allocator::MemoryAllocator;
 
 use crate::{
     game_system::game_world::{EntityCreationData, EntityPhysicsData, WorldChange},
-    render_system::vertex::Vertex3D,
+    render_system::{scene::{self, SceneUploadedObjectHandle}, vertex::Vertex3D},
 };
 
 use super::{
@@ -51,10 +52,11 @@ struct Chunk {
 
 enum ChunkWorkerEvent {
     ChunkGenerated(Point3<i32>, Vec<BlockIdx>),
-    ChunkMeshed(Point3<i32>, Instant, Vec<Vertex3D>, Option<Collider>),
+    ChunkMeshed(Point3<i32>, Instant, SceneUploadedObjectHandle<Vertex3D>, Option<Collider>),
 }
 
 struct InnerChunkManager {
+    memory_allocator: Arc<dyn MemoryAllocator>,
     threadpool: Arc<ThreadPool>,
     worldgen_data: WorldgenData,
     center_chunk: Point3<i32>,
@@ -66,12 +68,14 @@ struct InnerChunkManager {
 impl InnerChunkManager {
     pub fn new(
         threadpool: Arc<ThreadPool>,
+        memory_allocator: Arc<dyn MemoryAllocator>,
         seed: u32,
         block_definition_table: Arc<BlockDefinitionTable>,
     ) -> Self {
         let (event_sender, event_reciever) = std::sync::mpsc::channel();
         let mut cm = Self {
             threadpool,
+            memory_allocator,
             worldgen_data: WorldgenData {
                 noise: Arc::new(OpenSimplex::new(seed)),
                 block_definition_table,
@@ -215,8 +219,9 @@ impl InnerChunkManager {
                 let [left, right, down, up, back, front] =
                     self.unwrap_adjacent_chunks(chunk_position);
 
+                let memory_allocator = self.memory_allocator.clone();
                 self.threadpool.execute(move || {
-                    let mesh = chunk::gen_mesh(
+                    let vertexes = chunk::gen_mesh(
                         &block_table,
                         &data,
                         NeighboringChunkData {
@@ -229,8 +234,10 @@ impl InnerChunkManager {
                         },
                     );
 
+                    let mesh = scene::upload_object(memory_allocator, &vertexes);
+
                     let hitbox = chunk::gen_hitbox(&block_table, &data);
-                    // let hitbox = None;
+                
                     let _ = event_sender.send(ChunkWorkerEvent::ChunkMeshed(
                         chunk_position,
                         data_set_time,
@@ -468,11 +475,13 @@ pub struct ChunkManager {
 impl ChunkManager {
     pub fn new(
         threadpool: Arc<ThreadPool>,
+        memory_allocator: Arc<dyn MemoryAllocator>,
         seed: u32,
         block_definition_table: Arc<BlockDefinitionTable>,
     ) -> (Self, ChunkQuerier) {
         let inner = Rc::new(RefCell::new(InnerChunkManager::new(
             threadpool,
+            memory_allocator,
             seed,
             block_definition_table,
         )));

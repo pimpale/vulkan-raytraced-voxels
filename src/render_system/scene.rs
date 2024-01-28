@@ -1,4 +1,8 @@
-use std::{collections::{BTreeMap, VecDeque}, fmt::Debug, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use nalgebra::{Isometry3, Matrix4};
 use vulkano::{
@@ -96,29 +100,34 @@ where
     }
 
     // adds a new object to the scene with the given isometry
-    pub fn add_object(&mut self, key: K, object: &Vec<Vertex>, isometry: Isometry3<f32>) {
-        if object.len() == 0 {
-            self.objects.insert(key, None);
-            return;
+    pub fn add_object(
+        &mut self,
+        key: K,
+        object_handle: SceneUploadedObjectHandle<Vertex>,
+        isometry: Isometry3<f32>,
+    ) {
+        match object_handle {
+            SceneUploadedObjectHandle::Empty => {
+                self.objects.insert(key, None);
+            }
+            SceneUploadedObjectHandle::Uploaded(vertex_buffer) => {
+                let blas = create_bottom_level_acceleration_structure(
+                    &mut self.blas_command_buffer,
+                    self.memory_allocator.clone(),
+                    &[&vertex_buffer],
+                    isometry,
+                );
+                self.objects.insert(
+                    key,
+                    Some(Object {
+                        isometry,
+                        vertex_buffer,
+                        blas,
+                    }),
+                );
+                self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
+            }
         }
-
-        let vertex_buffer = blas_vertex_buffer(self.memory_allocator.clone(), [object]);
-        let blas = create_bottom_level_acceleration_structure(
-            &mut self.blas_command_buffer,
-            self.memory_allocator.clone(),
-            &[&vertex_buffer],
-            isometry,
-        );
-
-        self.objects.insert(
-            key,
-            Some(Object {
-                isometry,
-                vertex_buffer,
-                blas,
-            }),
-        );
-        self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
     }
 
     // updates the isometry of the object with the given key
@@ -287,6 +296,25 @@ where
             self.cached_instance_transforms.clone().unwrap(),
             future,
         );
+    }
+}
+
+#[derive(Clone)]
+pub enum SceneUploadedObjectHandle<Vertex> {
+    Empty,
+    Uploaded(Subbuffer<[Vertex]>),
+}
+
+pub fn upload_object<Vertex>(
+    memory_allocator: Arc<dyn MemoryAllocator>,
+    vertexes: &Vec<Vertex>,
+) -> SceneUploadedObjectHandle<Vertex>
+where
+    Vertex: Default + Clone + BufferContents,
+{
+    match vertexes.len() {
+        0 => return SceneUploadedObjectHandle::Empty,
+        _ => SceneUploadedObjectHandle::Uploaded(blas_vertex_buffer(memory_allocator, [vertexes])),
     }
 }
 

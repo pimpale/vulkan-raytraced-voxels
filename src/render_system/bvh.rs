@@ -2,7 +2,7 @@ use nalgebra::{Point3, Vector3};
 
 use crate::utils;
 
-use super::{shader::fs::Vertex, vertex::Vertex3D};
+use super::vertex::Vertex3D;
 
 trait Primitive {
     fn aabb(&self) -> Aabb;

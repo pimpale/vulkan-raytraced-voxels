@@ -26,7 +26,7 @@ impl Manager for SceneManager {
                 WorldChange::GlobalEntityAdd(entity_id, entity_creation_data) => {
                     scene.add_object(
                         *entity_id,
-                        &entity_creation_data.mesh,
+                        entity_creation_data.mesh.clone(),
                         entity_creation_data.isometry.clone().cast(),
                     );
                 }
