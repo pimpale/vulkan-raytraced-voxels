@@ -3,11 +3,7 @@ use rapier3d::geometry::{Collider, ColliderBuilder};
 
 use crate::render_system::vertex::Vertex3D;
 
-pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 3]) -> Vec<Vertex3D> {
-    let points: Vec<Vector3<f32>> = points
-        .iter()
-        .map(|p| Vector3::new(p[0], p[1], p[2]))
-        .collect();
+pub fn flat_polyline(points: Vec<Point3<f32>>, width: f32, color: [f32; 3]) -> Vec<Vertex3D> {
     let normals: Vec<Vector3<f32>> = std::iter::repeat([0.0, 1.0, 0.0].into())
         .take(points.len())
         .collect();
@@ -17,7 +13,7 @@ pub fn flat_polyline(points: Vec<Vector3<f32>>, width: f32, color: [f32; 3]) -> 
 }
 
 pub fn polyline(
-    points: Vec<Vector3<f32>>,
+    points: Vec<Point3<f32>>,
     normals: Vec<Vector3<f32>>,
     width: Vec<f32>,
     colors: Vec<[f32; 3]>,
@@ -58,14 +54,14 @@ pub fn polyline(
         .collect();
 
     // find the left and right points
-    let left_points: Vec<Vector3<f32>> = cross_vectors
+    let left_points: Vec<Point3<f32>> = cross_vectors
         .iter()
         .zip(width.iter())
         .zip(points.iter())
         .map(|((v, &w), p)| p - v * w)
         .collect();
 
-    let right_points: Vec<Vector3<f32>> = cross_vectors
+    let right_points: Vec<Point3<f32>> = cross_vectors
         .iter()
         .zip(width.iter())
         .zip(points.iter())
