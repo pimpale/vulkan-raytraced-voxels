@@ -257,8 +257,7 @@ impl GameWorld {
         };
         let (
             top_level_acceleration_structure,
-            instance_vertex_buffer_addresses,
-            instance_transforms,
+            instance_data,
             build_future,
         ) = self.scene.borrow_mut().get_tlas();
 
@@ -266,8 +265,7 @@ impl GameWorld {
         self.renderer.render(
             build_future,
             top_level_acceleration_structure,
-            instance_vertex_buffer_addresses,
-            instance_transforms,
+            instance_data,
             eye,
             front,
             right,

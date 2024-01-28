@@ -47,13 +47,17 @@ pub mod fs {
                 Vertex vertexes[];
             };
 
-            layout(set = 1, binding = 1) readonly buffer InstanceVertexBufferAddresses {
-                // one uint64 per instance that points to the device address of the data for that instance
-                uint64_t instance_vertex_buffer_addrs[];
+            struct InstanceData {
+                // points to the device address of the vertex data for this instance
+                uint64_t vertex_buffer_addr;
+                // points to the device address of the light bvh data for this instance
+                uint64_t bvh_node_buffer_addr;
+                // the transform of this instance
+                mat4x3 transform;
             };
 
-            layout(set = 1, binding = 2, scalar) readonly buffer InstanceTransforms {
-                mat4 instance_transforms[];
+            layout(set = 1, binding = 1, scalar) readonly buffer InstanceDataBuffer {
+                InstanceData instance_data[];
             };
 
 
@@ -215,17 +219,17 @@ pub mod fs {
                 vec3 bary3 = vec3(1.0 - bary.x - bary.y,  bary.x, bary.y);
 
                 // get the instance data for this instance
-                InstanceVertexBuffer id = InstanceVertexBuffer(instance_vertex_buffer_addrs[instance_index]);
-                Vertex v0 = id.vertexes[prim_index*3 + 0];
-                Vertex v1 = id.vertexes[prim_index*3 + 1];
-                Vertex v2 = id.vertexes[prim_index*3 + 2];
+                InstanceData id = instance_data[instance_index];
 
-                mat4 transform = instance_transforms[instance_index];
+                InstanceVertexBuffer ivb = InstanceVertexBuffer(id.vertex_buffer_addr);
+                Vertex v0 = ivb.vertexes[prim_index*3 + 0];
+                Vertex v1 = ivb.vertexes[prim_index*3 + 1];
+                Vertex v2 = ivb.vertexes[prim_index*3 + 2];
 
                 // get the transformed positions
-                vec3 v0_p = (transform * vec4(v0.position, 1.0)).xyz;
-                vec3 v1_p = (transform * vec4(v1.position, 1.0)).xyz;
-                vec3 v2_p = (transform * vec4(v2.position, 1.0)).xyz;
+                vec3 v0_p = id.transform * vec4(v0.position, 1.0);
+                vec3 v1_p = id.transform * vec4(v1.position, 1.0);
+                vec3 v2_p = id.transform * vec4(v2.position, 1.0);
 
                 // get the texture coordinates
                 uint t = v0.t;

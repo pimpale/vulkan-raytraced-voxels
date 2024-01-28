@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use nalgebra::{Isometry3, Matrix4};
+use nalgebra::{Isometry3, Matrix3x4, Matrix4, Matrix4x3};
 use vulkano::{
     acceleration_structure::{
         AccelerationStructure, AccelerationStructureBuildGeometryInfo,
@@ -27,7 +27,9 @@ use vulkano::{
     DeviceSize, Packed24_8,
 };
 
-pub struct Object<Vertex> {
+use super::vertex::InstanceData;
+
+struct Object<Vertex> {
     isometry: Isometry3<f32>,
     vertex_buffer: Subbuffer<[Vertex]>,
     blas: Arc<AccelerationStructure>,
@@ -52,8 +54,7 @@ pub struct Scene<K, Vertex> {
     n_swapchain_images: usize,
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
-    cached_instance_vertex_buffer_addresses: Option<Subbuffer<[u64]>>,
-    cached_instance_transforms: Option<Subbuffer<[[[f32; 4]; 4]]>>,
+    cached_instance_data: Option<Subbuffer<[InstanceData]>>,
     // last frame state
     cached_tlas_state: TopLevelAccelerationStructureState,
     // command buffer all building commands are submitted to
@@ -92,8 +93,7 @@ where
             old_objects: VecDeque::from([vec![]]),
             n_swapchain_images,
             cached_tlas: None,
-            cached_instance_vertex_buffer_addresses: None,
-            cached_instance_transforms: None,
+            cached_instance_data: None,
             cached_tlas_state: TopLevelAccelerationStructureState::NeedsRebuild,
             blas_command_buffer: command_buffer,
         }
@@ -172,40 +172,12 @@ where
         &mut self,
     ) -> (
         Arc<AccelerationStructure>,
-        Subbuffer<[u64]>,
-        Subbuffer<[[[f32; 4]; 4]]>,
+        Subbuffer<[InstanceData]>,
         Box<dyn GpuFuture>,
     ) {
-        // need to update instance vertex buffer addresses if an object was added or removed
-        if self.cached_tlas_state == TopLevelAccelerationStructureState::NeedsRebuild {
-            let instance_vertex_buffer_addresses = self
-                .objects
-                .values()
-                .flatten()
-                .map(|object| object.vertex_buffer.device_address().unwrap().get())
-                .collect::<Vec<_>>();
-
-            self.cached_instance_vertex_buffer_addresses = Some(
-                Buffer::from_iter(
-                    self.memory_allocator.clone(),
-                    BufferCreateInfo {
-                        usage: BufferUsage::SHADER_DEVICE_ADDRESS | BufferUsage::STORAGE_BUFFER,
-                        ..Default::default()
-                    },
-                    AllocationCreateInfo {
-                        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                            | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                        ..Default::default()
-                    },
-                    instance_vertex_buffer_addresses,
-                )
-                .unwrap(),
-            );
-        }
-
-        // rebuild the instance transforms buffer if any object was moved, added, or removed
+        // rebuild the instance buffer if any object was moved, added, or removed
         if self.cached_tlas_state != TopLevelAccelerationStructureState::UpToDate {
-            let instance_transforms = Buffer::from_iter(
+            let instance_data = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
                     usage: BufferUsage::STORAGE_BUFFER,
@@ -219,13 +191,25 @@ where
                 self.objects
                     .values()
                     .flatten()
-                    .map(|Object { isometry, .. }| {
-                        <[[f32; 4]; 4]>::from(Matrix4::from(isometry.clone()))
-                    })
+                    .map(
+                        |Object {
+                             isometry,
+                             vertex_buffer,
+                             ..
+                         }| InstanceData {
+                            transform: {
+                                let mat4: Matrix4<f32> = isometry.clone().into();
+                                let mat3x4: Matrix3x4<f32> = mat4.fixed_view::<3, 4>(0, 0).into();
+                                mat3x4.into()
+                            },
+                            bvh_node_buffer_addr: 0,
+                            vertex_buffer_addr: vertex_buffer.device_address().unwrap().get(),
+                        },
+                    )
                     .collect::<Vec<_>>(),
             )
             .unwrap();
-            self.cached_instance_transforms = Some(instance_transforms);
+            self.cached_instance_data = Some(instance_data);
         }
 
         let future = match self.cached_tlas_state {
@@ -290,10 +274,7 @@ where
         // return the tlas
         return (
             self.cached_tlas.clone().unwrap(),
-            self.cached_instance_vertex_buffer_addresses
-                .clone()
-                .unwrap(),
-            self.cached_instance_transforms.clone().unwrap(),
+            self.cached_instance_data.clone().unwrap(),
             future,
         );
     }
@@ -307,7 +288,7 @@ pub enum SceneUploadedObjectHandle<Vertex> {
 
 pub fn upload_object<Vertex>(
     memory_allocator: Arc<dyn MemoryAllocator>,
-    vertexes: &Vec<Vertex>,
+    vertexes: &[Vertex],
 ) -> SceneUploadedObjectHandle<Vertex>
 where
     Vertex: Default + Clone + BufferContents,
@@ -323,7 +304,7 @@ fn blas_vertex_buffer<'a, Vertex, Container>(
     objects: Container,
 ) -> Subbuffer<[Vertex]>
 where
-    Container: IntoIterator<Item = &'a Vec<Vertex>>,
+    Container: IntoIterator<Item = &'a [Vertex]>,
     Vertex: Default + Clone + BufferContents,
 {
     let vertexes = objects

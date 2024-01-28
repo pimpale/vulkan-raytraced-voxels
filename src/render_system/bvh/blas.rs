@@ -316,6 +316,7 @@ where
     // nodes now contains a list of all the nodes in the blas.
     // however, it contains rust constructs and is not able to be passed to the shader
     // we now need to convert it into a list of floats
+    nodes
 }
 
 // creates a visualization of the blas by turning it into a mesh

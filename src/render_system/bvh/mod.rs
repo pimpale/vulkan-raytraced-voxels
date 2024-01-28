@@ -9,6 +9,8 @@ pub mod tlas;
 pub struct BlBvhNode {
     // the approximate center of the node
     centroid: [f32; 3],
+    // the diagonal of the node
+    diagonal: f32,
     // how much power is in this light node
     power: f32,
     // if this is 0xFFFFFFFF, then this is a leaf node
@@ -23,6 +25,8 @@ pub struct BlBvhNode {
 pub struct TlBvhNode {
     // the approximate center of the node
     centroid: [f32; 3],
+    // the diagonal of the node
+    diagonal: f32,
     // how much light power is in this node
     power: f32,
     // if this is 0xFFFFFFFF, then this is a leaf node

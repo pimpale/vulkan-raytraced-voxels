@@ -51,7 +51,7 @@ use winit::window::Window;
 
 use super::{
     shader::{fs, vs},
-    vertex::Vertex3D,
+    vertex::{InstanceData, Vertex3D},
 };
 
 pub fn get_device_for_rendering_on(
@@ -489,8 +489,7 @@ impl Renderer {
         &mut self,
         build_future: Box<dyn GpuFuture>,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
-        instance_vertex_buffer_addresses: Subbuffer<[u64]>,
-        instance_transforms: Subbuffer<[[[f32; 4]; 4]]>,
+        instance_data: Subbuffer<[InstanceData]>,
         eye: Point3<f32>,
         front: Vector3<f32>,
         right: Vector3<f32>,
@@ -544,8 +543,7 @@ impl Renderer {
             self.pipeline.layout().set_layouts().get(1).unwrap().clone(),
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
-                WriteDescriptorSet::buffer(1, instance_vertex_buffer_addresses),
-                WriteDescriptorSet::buffer(2, instance_transforms),
+                WriteDescriptorSet::buffer(1, instance_data),
             ],
             [],
         )
