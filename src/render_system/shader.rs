@@ -18,6 +18,7 @@ pub mod vs {
 pub mod fs {
     vulkano_shaders::shader! {
         ty: "fragment",
+        linalg_type: "nalgebra",
         src: r"
             #version 460
             #extension GL_EXT_ray_query: require

@@ -2,7 +2,7 @@ use nalgebra::{Point3, Vector3};
 
 use crate::utils;
 
-use super::vertex::Vertex3D;
+use super::super::vertex::Vertex3D;
 
 trait Primitive {
     fn aabb(&self) -> Aabb;
@@ -73,31 +73,30 @@ impl Aabb {
 }
 
 #[derive(Clone, Debug)]
-
-struct BlasLeaf {
+struct BuildBlasLeaf {
     first_prim_idx_idx: usize,
     prim_count: usize,
 }
 
 #[derive(Clone, Debug)]
-struct BlasInternalNode {
+struct BuildBlasInternalNode {
     left_child_idx: usize,
     right_child_idx: usize,
 }
 
 #[derive(Clone, Debug)]
-enum BlasNodeKind {
-    Leaf(BlasLeaf),
-    InternalNode(BlasInternalNode),
+enum BuildBlasNodeKind {
+    Leaf(BuildBlasLeaf),
+    InternalNode(BuildBlasInternalNode),
 }
 
 #[derive(Clone, Debug)]
-struct BlasNode {
+struct BuildBlasNode {
     aabb: Aabb,
-    kind: BlasNodeKind,
+    kind: BuildBlasNodeKind,
 }
 
-fn blas_leaf_bounds(leaf: &BlasLeaf, prim_idxs: &Vec<usize>, prim_aabbs: &Vec<Aabb>) -> Aabb {
+fn blas_leaf_bounds(leaf: &BuildBlasLeaf, prim_idxs: &Vec<usize>, prim_aabbs: &Vec<Aabb>) -> Aabb {
     let mut bound = Aabb::Empty;
     for i in leaf.first_prim_idx_idx..(leaf.first_prim_idx_idx + leaf.prim_count) {
         let prim_aabb = prim_aabbs[prim_idxs[i]];
@@ -107,7 +106,7 @@ fn blas_leaf_bounds(leaf: &BlasLeaf, prim_idxs: &Vec<usize>, prim_aabbs: &Vec<Aa
 }
 
 fn find_best_plane(
-    leaf: &BlasLeaf,
+    leaf: &BuildBlasLeaf,
     prim_idxs: &Vec<usize>,
     prim_centroids: &Vec<Point3<f32>>,
     prim_aabbs: &Vec<Aabb>,
@@ -197,11 +196,11 @@ fn subdivide(
     prim_idxs: &mut Vec<usize>,
     prim_aabbs: &Vec<Aabb>,
     prim_centroids: &Vec<Point3<f32>>,
-    nodes: &mut Vec<BlasNode>,
+    nodes: &mut Vec<BuildBlasNode>,
     cost_function: &impl Fn(&Aabb, &Aabb, usize, usize) -> f32,
 ) {
     match nodes[node_idx].kind {
-        BlasNodeKind::Leaf(ref leaf) if leaf.prim_count > 2 => {
+        BuildBlasNodeKind::Leaf(ref leaf) if leaf.prim_count > 2 => {
             // get best plane to split along
             let (dimension, split_pos) =
                 find_best_plane(leaf, prim_idxs, prim_centroids, prim_aabbs, cost_function);
@@ -222,13 +221,13 @@ fn subdivide(
             }
 
             // create left child
-            let left_leaf = BlasLeaf {
+            let left_leaf = BuildBlasLeaf {
                 first_prim_idx_idx: leaf.first_prim_idx_idx,
                 prim_count: partitions.0.len(),
             };
 
             // create right child
-            let right_leaf = BlasLeaf {
+            let right_leaf = BuildBlasLeaf {
                 first_prim_idx_idx: leaf.first_prim_idx_idx + partitions.0.len(),
                 prim_count: partitions.1.len(),
             };
@@ -238,7 +237,7 @@ fn subdivide(
             let right_child_idx = insert_blas_leaf_node(right_leaf, nodes, prim_idxs, prim_aabbs);
 
             // update parent
-            nodes[node_idx].kind = BlasNodeKind::InternalNode(BlasInternalNode {
+            nodes[node_idx].kind = BuildBlasNodeKind::InternalNode(BuildBlasInternalNode {
                 left_child_idx,
                 right_child_idx,
             });
@@ -266,20 +265,20 @@ fn subdivide(
 }
 
 fn insert_blas_leaf_node(
-    leaf: BlasLeaf,
-    nodes: &mut Vec<BlasNode>,
+    leaf: BuildBlasLeaf,
+    nodes: &mut Vec<BuildBlasNode>,
     prim_idxs: &Vec<usize>,
     prim_aabbs: &Vec<Aabb>,
 ) -> usize {
     let node_idx = nodes.len();
-    nodes.push(BlasNode {
+    nodes.push(BuildBlasNode {
         aabb: blas_leaf_bounds(&leaf, prim_idxs, prim_aabbs),
-        kind: BlasNodeKind::Leaf(leaf),
+        kind: BuildBlasNodeKind::Leaf(leaf),
     });
     node_idx
 }
 
-fn build_blas<T>(primitives: Vec<T>) -> Vec<BlasNode>
+fn build_blas<T>(primitives: Vec<T>) -> Vec<BuildBlasNode>
 where
     T: Primitive,
 {
@@ -291,7 +290,7 @@ where
 
     // create root node
     let root_node_idx = insert_blas_leaf_node(
-        BlasLeaf {
+        BuildBlasLeaf {
             first_prim_idx_idx: 0,
             prim_count: primitives.len(),
         },
@@ -314,14 +313,16 @@ where
         &cost_function,
     );
 
-    nodes
+    // nodes now contains a list of all the nodes in the blas.
+    // however, it contains rust constructs and is not able to be passed to the shader
+    // we now need to convert it into a list of floats
 }
 
 // creates a visualization of the blas by turning it into a mesh
-fn create_blas_visualization(blas_nodes: &Vec<BlasNode>) -> Vec<Vertex3D> {
+fn create_blas_visualization(blas_nodes: &Vec<BuildBlasNode>) -> Vec<Vertex3D> {
     fn create_blas_visualization_inner(
         node_idx: usize,
-        blas_nodes: &Vec<BlasNode>,
+        blas_nodes: &Vec<BuildBlasNode>,
         vertexes: &mut Vec<Vertex3D>,
     ) {
         // insert aabb into vertexes
@@ -336,8 +337,8 @@ fn create_blas_visualization(blas_nodes: &Vec<BlasNode>) -> Vec<Vertex3D> {
         }
 
         match blas_nodes[node_idx].kind {
-            BlasNodeKind::Leaf(_) => {}
-            BlasNodeKind::InternalNode(ref internal_node) => {
+            BuildBlasNodeKind::Leaf(_) => {}
+            BuildBlasNodeKind::InternalNode(ref internal_node) => {
                 create_blas_visualization_inner(internal_node.left_child_idx, blas_nodes, vertexes);
                 create_blas_visualization_inner(
                     internal_node.right_child_idx,
