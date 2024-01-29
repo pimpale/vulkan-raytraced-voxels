@@ -12,7 +12,7 @@ pub struct BlBvhNode {
     // the diagonal of the node
     diagonal: f32,
     // how much power is in this light node
-    power: f32,
+    luminance: f32,
     // if this is 0xFFFFFFFF, then this is a leaf node
     left_node_idx: u32,
     // if left_node_idx is 0xFFFFFFFF, right_node_idx_or_prim_idx is a primitive index

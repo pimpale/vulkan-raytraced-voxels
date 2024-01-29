@@ -60,7 +60,6 @@ pub mod fs {
                 InstanceData instance_data[];
             };
 
-
             // struct LightBvhNode {
             //     vec3 position;
             //     float totalEmissivePower;
@@ -185,7 +184,7 @@ pub mod fs {
                 rayQueryInitializeEXT(
                     ray_query,
                     top_level_acceleration_structure,
-                    gl_RayFlagsNoneEXT,
+                    gl_RayFlagsNoneEXT,//gl_RayFlagsCullBackFacingTrianglesEXT,
                     0xFF,
                     origin,
                     t_min,
@@ -346,7 +345,7 @@ pub mod fs {
             }
 
             //const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 5;
+            const uint MAX_BOUNCES = 16;
 
             void main() {
                 uint SAMPLES_PER_PIXEL = camera.samples;

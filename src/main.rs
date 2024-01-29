@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use game_system::game_world::{EntityCreationData, EntityPhysicsData, GameWorld};
-use nalgebra::{Isometry3, Vector3, Point3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use rapier3d::{dynamics::RigidBodyType, geometry::ColliderBuilder};
 
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -92,10 +92,7 @@ fn build_scene(
                 controlled: true,
                 grounded: false,
             }),
-            mesh: render_system::scene::upload_object(
-                memory_allocator.clone(),
-                &utils::unitcube()
-            ),
+            mesh: render_system::scene::upload_object(memory_allocator.clone(), &utils::unitcube()),
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
         },
     );
@@ -142,16 +139,16 @@ fn build_scene(
     //     },
     // );
 
-    // // add ground
-    // let blas_test_mesh = render_system::bvh::test_blas();
-    // world.add_entity(
-    //     4,
-    //     EntityCreationData {
-    //         physics: None,
-    //         mesh: blas_test_mesh,
-    //         isometry: Isometry3::identity(),
-    //     },
-    // );
+    // add blas test
+    let blas_test_mesh = render_system::bvh::blas::test_blas();
+    world.add_entity(
+        4,
+        EntityCreationData {
+            physics: None,
+            mesh: render_system::scene::upload_object(memory_allocator.clone(), &blas_test_mesh),
+            isometry: Isometry3::identity(),
+        },
+    );
 
     world
 }

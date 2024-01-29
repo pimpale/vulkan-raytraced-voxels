@@ -1,15 +1,17 @@
 use nalgebra::{Point3, Vector3};
 
-use crate::utils;
+use crate::{render_system::bvh::BlBvhNode, utils};
 
 use super::super::vertex::Vertex3D;
 
 trait Primitive {
     fn aabb(&self) -> Aabb;
     fn centroid(&self) -> Point3<f32>;
+    fn luminance(&self) -> f32;
 }
 
 struct Triangle {
+    luminance: f32,
     v0: Point3<f32>,
     v1: Point3<f32>,
     v2: Point3<f32>,
@@ -24,6 +26,10 @@ impl Primitive for Triangle {
 
     fn centroid(&self) -> Point3<f32> {
         Point3::from((self.v0.coords + self.v1.coords + self.v2.coords) / 3.0)
+    }
+
+    fn luminance(&self) -> f32 {
+        self.luminance
     }
 }
 
@@ -58,6 +64,13 @@ impl Aabb {
         match self {
             Aabb::Empty => Vector3::zeros(),
             Aabb::NonEmpty { min, max } => max - min,
+        }
+    }
+
+    fn centroid(&self) -> Point3<f32> {
+        match self {
+            Aabb::Empty => Point3::origin(),
+            Aabb::NonEmpty { min, max } => Point3::from((min.coords + max.coords) / 2.0),
         }
     }
 
@@ -278,7 +291,7 @@ fn insert_blas_leaf_node(
     node_idx
 }
 
-fn build_blas<T>(primitives: Vec<T>) -> Vec<BuildBlasNode>
+fn build_blas<T>(primitives: Vec<T>) -> Vec<BlBvhNode>
 where
     T: Primitive,
 {
@@ -315,34 +328,62 @@ where
 
     // nodes now contains a list of all the nodes in the blas.
     // however, it contains rust constructs and is not able to be passed to the shader
-    // we now need to convert it into a list of floats
-    nodes
+    // we now need to convert it into the finalized state that is optimized for gpu consumption
+    let mut opt_bvh = nodes
+        .into_iter()
+        .map(|node| match node.kind {
+            BuildBlasNodeKind::Leaf(ref leaf) => BlBvhNode {
+                centroid: prim_centroids[prim_idxs[leaf.first_prim_idx_idx]].into(),
+                diagonal: node.aabb.diagonal().norm(),
+                luminance: primitives[prim_idxs[leaf.first_prim_idx_idx]].luminance(),
+                left_node_idx: u32::MAX,
+                right_node_idx_or_prim_idx: prim_idxs[leaf.first_prim_idx_idx] as u32,
+            },
+            BuildBlasNodeKind::InternalNode(ref internal_node) => BlBvhNode {
+                centroid: node.aabb.centroid().into(),
+                diagonal: node.aabb.diagonal().norm(),
+                luminance: 0.0,
+                left_node_idx: internal_node.left_child_idx as u32,
+                right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
+            },
+        })
+        .collect::<Vec<_>>();
+
+    // compute luminance values for non-leaf nodes
+    // the luminance of a node is the sum of the luminance of its children
+    // the luminance of a leaf node is the luminance of the primitive it contains
+
+    // the list is topologically sorted so we can just iterate over it in reverse order, and be sure that all the children of a node have already been processed
+    for i in (0..opt_bvh.len()).rev() {
+        if opt_bvh[i].left_node_idx != u32::MAX {
+            // internal node
+            let left_child = &opt_bvh[opt_bvh[i].left_node_idx as usize];
+            let right_child = &opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize];
+            opt_bvh[i].luminance = left_child.luminance + right_child.luminance;
+        }
+    }
+
+    opt_bvh
 }
 
 // creates a visualization of the blas by turning it into a mesh
-fn create_blas_visualization(blas_nodes: &Vec<BuildBlasNode>) -> Vec<Vertex3D> {
+fn create_blas_visualization(blas_nodes: &Vec<BlBvhNode>) -> Vec<Vertex3D> {
     fn create_blas_visualization_inner(
         node_idx: usize,
-        blas_nodes: &Vec<BuildBlasNode>,
+        blas_nodes: &Vec<BlBvhNode>,
         vertexes: &mut Vec<Vertex3D>,
     ) {
-        // insert aabb into vertexes
-        let aabb = blas_nodes[node_idx].aabb;
-        match aabb {
-            Aabb::Empty => {}
-            Aabb::NonEmpty { min, max } => {
-                let loc = Point3::from((min.coords + max.coords) / 2.0);
-                let dims = max - min;
-                vertexes.extend(utils::cuboid(loc, dims));
-            }
-        }
+        let node = &blas_nodes[node_idx];
+        let loc = Point3::from(node.centroid);
+        let dims = Vector3::repeat(node.diagonal);
+        vertexes.extend(utils::cuboid(loc, dims));
 
-        match blas_nodes[node_idx].kind {
-            BuildBlasNodeKind::Leaf(_) => {}
-            BuildBlasNodeKind::InternalNode(ref internal_node) => {
-                create_blas_visualization_inner(internal_node.left_child_idx, blas_nodes, vertexes);
+        match blas_nodes[node_idx].left_node_idx {
+            u32::MAX => {}
+            _ => {
+                create_blas_visualization_inner(node.left_node_idx as usize, blas_nodes, vertexes);
                 create_blas_visualization_inner(
-                    internal_node.right_child_idx,
+                    node.right_node_idx_or_prim_idx as usize,
                     blas_nodes,
                     vertexes,
                 );
@@ -363,12 +404,18 @@ pub fn test_blas() -> Vec<Vertex3D> {
         let x = rand::random::<f32>() * 40.0 - 20.0;
         let y = rand::random::<f32>() * 40.0 - 20.0;
         let z = rand::random::<f32>() * 40.0 - 20.0;
+        let luminance = rand::random::<f32>() * 10.0;
 
         let v0 = Point3::new(x, y, z);
         let v1 = Point3::new(x, y + 0.1, z);
         let v2 = Point3::new(x, y, z + 0.1);
 
-        primitives.push(Triangle { v0, v1, v2 });
+        primitives.push(Triangle {
+            luminance,
+            v0,
+            v1,
+            v2,
+        });
     }
 
     let nodes = build_blas(primitives);
