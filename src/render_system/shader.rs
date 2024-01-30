@@ -344,8 +344,8 @@ pub mod fs {
                 );
             }
 
-            //const uint SAMPLES_PER_PIXEL = 1;
-            const uint MAX_BOUNCES = 16;
+            // const uint SAMPLES_PER_PIXEL = 1;
+            const uint MAX_BOUNCES = 5;
 
             void main() {
                 uint SAMPLES_PER_PIXEL = camera.samples;
