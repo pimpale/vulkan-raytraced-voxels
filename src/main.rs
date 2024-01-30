@@ -78,6 +78,8 @@ fn build_scene(
         Box::new(camera::SphericalCamera::new()),
     );
 
+    let uploader = world.scene_uploader().clone();
+
     // add ego agent
     let ego_mesh = utils::unitcube();
     world.add_entity(
@@ -92,7 +94,7 @@ fn build_scene(
                 controlled: true,
                 grounded: false,
             }),
-            mesh: render_system::scene::upload_object(memory_allocator.clone(), &utils::unitcube()),
+            mesh: uploader.upload_object(utils::unitcube()),
             isometry: Isometry3::translation(0.0, 5.0, 0.0),
         },
     );
@@ -140,12 +142,12 @@ fn build_scene(
     // );
 
     // add blas test
-    let blas_test_mesh = render_system::bvh::blas::test_blas();
+    let blas_test_mesh = render_system::bvh::build::test_blas();
     world.add_entity(
         4,
         EntityCreationData {
             physics: None,
-            mesh: render_system::scene::upload_object(memory_allocator.clone(), &blas_test_mesh),
+            mesh: uploader.upload_object(blas_test_mesh),
             isometry: Isometry3::identity(),
         },
     );

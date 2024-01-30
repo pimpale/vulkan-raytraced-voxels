@@ -17,7 +17,7 @@ use vulkano::memory::allocator::MemoryAllocator;
 
 use crate::{
     game_system::game_world::{EntityCreationData, EntityPhysicsData, WorldChange},
-    render_system::{scene::{self, SceneUploadedObjectHandle}, vertex::Vertex3D},
+    render_system::{scene::{self, SceneUploadedObjectHandle, SceneUploader}, vertex::Vertex3D},
 };
 
 use super::{
@@ -52,11 +52,12 @@ struct Chunk {
 
 enum ChunkWorkerEvent {
     ChunkGenerated(Point3<i32>, Vec<BlockIdx>),
-    ChunkMeshed(Point3<i32>, Instant, SceneUploadedObjectHandle<Vertex3D>, Option<Collider>),
+    ChunkMeshed(Point3<i32>, Instant, SceneUploadedObjectHandle, Option<Collider>),
 }
 
 struct InnerChunkManager {
     memory_allocator: Arc<dyn MemoryAllocator>,
+    uploader: SceneUploader,
     threadpool: Arc<ThreadPool>,
     worldgen_data: WorldgenData,
     center_chunk: Point3<i32>,
@@ -67,6 +68,7 @@ struct InnerChunkManager {
 
 impl InnerChunkManager {
     pub fn new(
+        uploader: SceneUploader,
         threadpool: Arc<ThreadPool>,
         memory_allocator: Arc<dyn MemoryAllocator>,
         seed: u32,
@@ -74,6 +76,7 @@ impl InnerChunkManager {
     ) -> Self {
         let (event_sender, event_reciever) = std::sync::mpsc::channel();
         let mut cm = Self {
+            uploader,
             threadpool,
             memory_allocator,
             worldgen_data: WorldgenData {
@@ -219,7 +222,7 @@ impl InnerChunkManager {
                 let [left, right, down, up, back, front] =
                     self.unwrap_adjacent_chunks(chunk_position);
 
-                let memory_allocator = self.memory_allocator.clone();
+                let uploader = self.uploader.clone();
                 self.threadpool.execute(move || {
                     let vertexes = chunk::gen_mesh(
                         &block_table,
@@ -234,7 +237,7 @@ impl InnerChunkManager {
                         },
                     );
 
-                    let mesh = scene::upload_object(memory_allocator, &vertexes);
+                    let mesh = uploader.upload_object(vertexes);
 
                     let hitbox = chunk::gen_hitbox(&block_table, &data);
                 
@@ -475,11 +478,13 @@ pub struct ChunkManager {
 impl ChunkManager {
     pub fn new(
         threadpool: Arc<ThreadPool>,
+        uploader: SceneUploader,
         memory_allocator: Arc<dyn MemoryAllocator>,
         seed: u32,
         block_definition_table: Arc<BlockDefinitionTable>,
     ) -> (Self, ChunkQuerier) {
         let inner = Rc::new(RefCell::new(InnerChunkManager::new(
+            uploader,
             threadpool,
             memory_allocator,
             seed,

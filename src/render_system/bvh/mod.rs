@@ -1,38 +1,23 @@
 use vulkano::buffer::BufferContents;
 
-pub mod blas;
-pub mod tlas;
+pub mod build;
+pub mod aabb;
 
 
 #[derive(Debug, Clone, BufferContents)]
 #[repr(C)]
-pub struct BlBvhNode {
-    // the approximate center of the node
-    centroid: [f32; 3],
-    // the diagonal of the node
-    diagonal: f32,
+pub struct BvhNode {
+    // the min bound
+    pub min: [f32; 3],
+    // the max bound
+    pub max: [f32; 3],
     // how much power is in this light node
-    luminance: f32,
+    pub luminance: f32,
     // if this is 0xFFFFFFFF, then this is a leaf node
-    left_node_idx: u32,
-    // if left_node_idx is 0xFFFFFFFF, right_node_idx_or_prim_idx is a primitive index
-    // otherwise, it is a right node index
-    right_node_idx_or_prim_idx: u32,
-}
-
-#[derive(Debug, Clone, BufferContents)]
-#[repr(C)]
-pub struct TlBvhNode {
-    // the approximate center of the node
-    centroid: [f32; 3],
-    // the diagonal of the node
-    diagonal: f32,
-    // how much light power is in this node
-    power: f32,
-    // if this is 0xFFFFFFFF, then this is a leaf node
-    // otherwise, it is a left node index
-    left_node_idx: u32,
-    // if left_node_idx is 0xFFFFFFFF, then this is the index of the instance
-    // otherwise, it is a right node index
-    right_node_idx_or_instancce_idx: u32,
+    pub left_node_idx: u32,
+    // if left_node_idx is 0xFFFFFFFF, right_node_idx_or_prim_idx is an `Index`
+    // if this BVH represents a bottom level BVH, then `Index` is a GLSL PrimitiveIndex
+    // if this BVH represents a top level BVH, then `Index` is a GLSL InstanceID
+    // otherwise, it is the index of the right node
+    pub right_node_idx_or_prim_idx: u32,
 }

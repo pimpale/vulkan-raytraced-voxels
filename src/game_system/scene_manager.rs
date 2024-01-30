@@ -2,17 +2,17 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     game_system::game_world::WorldChange,
-    render_system::{scene::Scene, vertex::Vertex3D},
+    render_system::scene::Scene,
 };
 
 use super::manager::{Manager, UpdateData};
 
 pub struct SceneManager {
-    pub scene: Rc<RefCell<Scene<u32, Vertex3D>>>,
+    pub scene: Rc<RefCell<Scene<u32>>>,
 }
 
 impl SceneManager {
-    pub fn new(scene: Rc<RefCell<Scene<u32, Vertex3D>>>) -> Self {
+    pub fn new(scene: Rc<RefCell<Scene<u32>>>) -> Self {
         Self { scene }
     }
 }

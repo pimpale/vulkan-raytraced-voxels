@@ -1,3 +1,4 @@
+use image::RgbaImage;
 use nalgebra::{Point2, Point3, Vector2, Vector3};
 use rapier3d::geometry::{Collider, ColliderBuilder};
 
@@ -85,9 +86,9 @@ pub fn polyline(
 }
 
 pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
-    let fx = loc[0] - 0.5*dims[0];
-    let fy = loc[1] - 0.5*dims[1];
-    let fz = loc[2] - 0.5*dims[2];
+    let fx = loc[0] - 0.5 * dims[0];
+    let fy = loc[1] - 0.5 * dims[1];
+    let fz = loc[2] - 0.5 * dims[2];
 
     let v000 = [fx + 0.0, fy + 0.0, fz + 0.0];
     let v100 = [fx + dims[0], fy + 0.0, fz + 0.0];
@@ -216,4 +217,18 @@ pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
     let x = e[0] / extent[0] as f32;
     let y = e[1] / extent[1] as f32;
     Point2::new(2.0 * x - 1.0, 2.0 * y - 1.0)
+}
+
+pub fn get_texture_luminances(texture_atlas: &Vec<(RgbaImage, RgbaImage, RgbaImage)>) -> Vec<f32> {
+    texture_atlas
+        .iter()
+        .map(|(_, emissivity, _)| {
+            let mut luminance = 0.0;
+            for pixel in emissivity.pixels() {
+                let [r, g, b, _] = pixel.0;
+                luminance += r as f32 + g as f32 + b as f32;
+            }
+            luminance / (emissivity.width() * emissivity.height()) as f32
+        })
+        .collect()
 }

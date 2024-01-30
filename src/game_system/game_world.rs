@@ -29,7 +29,8 @@ use crate::game_system::scene_manager::SceneManager;
 use crate::render_system::interactive_rendering;
 use crate::render_system::scene::Scene;
 use crate::render_system::scene::SceneUploadedObjectHandle;
-use crate::render_system::vertex::Vertex3D;
+use crate::render_system::scene::SceneUploader;
+use crate::utils;
 
 #[derive(Clone)]
 pub struct EntityPhysicsData {
@@ -45,7 +46,7 @@ pub struct EntityCreationData {
     // if not specified then the object is visual only
     pub physics: Option<EntityPhysicsData>,
     // scene object handle
-    pub mesh: SceneUploadedObjectHandle<Vertex3D>,
+    pub mesh: SceneUploadedObjectHandle,
     // initial transformation
     // position and rotation in space
     pub isometry: Isometry3<f32>,
@@ -53,7 +54,7 @@ pub struct EntityCreationData {
 
 pub struct Entity {
     // mesh (untransformed)
-    pub mesh: SceneUploadedObjectHandle<Vertex3D>,
+    pub mesh: SceneUploadedObjectHandle,
     // transformation from origin
     pub isometry: Isometry3<f32>,
     // physics
@@ -89,7 +90,8 @@ pub enum WorldChange {
 pub struct GameWorld {
     entities: HashMap<u32, Entity>,
     ego_entity_id: u32,
-    scene: Rc<RefCell<Scene<u32, Vertex3D>>>,
+    scene: Rc<RefCell<Scene<u32>>>,
+    scene_uploader: SceneUploader,
     camera: Rc<RefCell<Box<dyn InteractiveCamera>>>,
     surface: Arc<Surface>,
     renderer: interactive_rendering::Renderer,
@@ -122,6 +124,8 @@ impl GameWorld {
             &mut texture_atlas,
         ));
 
+        let texture_luminances = utils::get_texture_luminances(&texture_atlas);
+
         let renderer = interactive_rendering::Renderer::new(
             surface.clone(),
             general_queue.clone(),
@@ -131,13 +135,18 @@ impl GameWorld {
             texture_atlas,
         );
 
-        let scene = Rc::new(RefCell::new(Scene::new(
+
+        let scene = Scene::new(
             general_queue.clone(),
             transfer_queue.clone(),
             memory_allocator.clone(),
             command_buffer_allocator.clone(),
             renderer.n_swapchain_images(),
-        )));
+            texture_luminances,
+        );
+
+        let scene_uploader = scene.uploader();
+        let scene = Rc::new(RefCell::new(scene));
 
         let threadpool = Arc::new(ThreadPool::new(15));
 
@@ -146,7 +155,7 @@ impl GameWorld {
         let camera = Rc::new(RefCell::new(camera));
 
         let (chunk_manager, chunk_querier) =
-            ChunkManager::new(threadpool, memory_allocator.clone(), 0, block_table.clone());
+            ChunkManager::new(threadpool, scene_uploader.clone(), memory_allocator.clone(), 0, block_table.clone());
 
         let physics_manager = PhysicsManager::new();
 
@@ -156,6 +165,7 @@ impl GameWorld {
         GameWorld {
             entities: HashMap::new(),
             scene,
+            scene_uploader,
             camera,
             ego_entity_id,
             renderer,
@@ -255,11 +265,8 @@ impl GameWorld {
             let camera = self.camera.borrow();
             (camera.eye_front_right_up(), camera.rendering_preferences())
         };
-        let (
-            top_level_acceleration_structure,
-            instance_data,
-            build_future,
-        ) = self.scene.borrow_mut().get_tlas();
+        let (top_level_acceleration_structure, instance_data, build_future) =
+            self.scene.borrow_mut().get_tlas();
 
         // render to screen
         self.renderer.render(
@@ -309,5 +316,9 @@ impl GameWorld {
         if let Some(event) = input.to_static() {
             self.events_since_last_step.push(event);
         }
+    }
+
+    pub fn scene_uploader(&self) -> &SceneUploader {
+        &self.scene_uploader
     }
 }

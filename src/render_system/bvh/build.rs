@@ -1,6 +1,9 @@
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 
-use crate::{render_system::bvh::BlBvhNode, utils};
+use crate::{
+    render_system::bvh::{aabb::Aabb, BvhNode},
+    utils,
+};
 
 use super::super::vertex::Vertex3D;
 
@@ -33,83 +36,66 @@ impl Primitive for Triangle {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Aabb {
-    Empty,
-    NonEmpty { min: Point3<f32>, max: Point3<f32> },
+struct BlBvh {
+    nodes: Vec<BvhNode>,
+    transform: Isometry3<f32>,
 }
 
-impl Aabb {
-    fn union(a: &Aabb, b: &Aabb) -> Aabb {
-        match (a, b) {
-            (Aabb::Empty, _) => *b,
-            (_, Aabb::Empty) => *a,
-            (
-                Aabb::NonEmpty {
-                    min: amin,
-                    max: amax,
-                },
-                Aabb::NonEmpty {
-                    min: bmin,
-                    max: bmax,
-                },
-            ) => Aabb::NonEmpty {
-                min: amin.inf(bmin),
-                max: amax.sup(bmax),
-            },
-        }
-    }
+impl Primitive for BlBvh {
+    fn aabb(&self) -> Aabb {
+        // enumerate all corners of the bounding box:
+        let min = Point3::from(self.nodes[0].min);
+        let max = Point3::from(self.nodes[0].max);
 
-    fn diagonal(&self) -> Vector3<f32> {
-        match self {
-            Aabb::Empty => Vector3::zeros(),
-            Aabb::NonEmpty { min, max } => max - min,
-        }
+        let corners = [
+            self.transform * min,
+            self.transform * Point3::new(min.x, min.y, max.z),
+            self.transform * Point3::new(min.x, max.y, min.z),
+            self.transform * Point3::new(min.x, max.y, max.z),
+            self.transform * Point3::new(max.x, min.y, min.z),
+            self.transform * Point3::new(max.x, min.y, max.z),
+            self.transform * Point3::new(max.x, max.y, min.z),
+            self.transform * max,
+        ];
+        Aabb::from_points(&corners)
     }
 
     fn centroid(&self) -> Point3<f32> {
-        match self {
-            Aabb::Empty => Point3::origin(),
-            Aabb::NonEmpty { min, max } => Point3::from((min.coords + max.coords) / 2.0),
-        }
+        let min = Point3::from(self.nodes[0].min);
+        let max = Point3::from(self.nodes[0].max);
+        self.transform * Point3::from((min.coords + max.coords) / 2.0)
     }
 
-    fn area(&self) -> f32 {
-        match self {
-            Aabb::Empty => 0.0,
-            Aabb::NonEmpty { min, max } => {
-                let diff = max - min;
-                2.0 * (diff.x * diff.y + diff.x * diff.z + diff.y * diff.z)
-            }
-        }
+    fn luminance(&self) -> f32 {
+        self.nodes[0].luminance
     }
 }
 
 #[derive(Clone, Debug)]
-struct BuildBlasLeaf {
+struct BuildBvhLeaf {
     first_prim_idx_idx: usize,
     prim_count: usize,
 }
 
 #[derive(Clone, Debug)]
-struct BuildBlasInternalNode {
+struct BuildBvhInternalNode {
     left_child_idx: usize,
     right_child_idx: usize,
 }
 
 #[derive(Clone, Debug)]
-enum BuildBlasNodeKind {
-    Leaf(BuildBlasLeaf),
-    InternalNode(BuildBlasInternalNode),
+enum BuildBvhNodeKind {
+    Leaf(BuildBvhLeaf),
+    InternalNode(BuildBvhInternalNode),
 }
 
 #[derive(Clone, Debug)]
-struct BuildBlasNode {
+struct BuildBvhNode {
     aabb: Aabb,
-    kind: BuildBlasNodeKind,
+    kind: BuildBvhNodeKind,
 }
 
-fn blas_leaf_bounds(leaf: &BuildBlasLeaf, prim_idxs: &Vec<usize>, prim_aabbs: &Vec<Aabb>) -> Aabb {
+fn blas_leaf_bounds(leaf: &BuildBvhLeaf, prim_idxs: &[usize], prim_aabbs: &[Aabb]) -> Aabb {
     let mut bound = Aabb::Empty;
     for i in leaf.first_prim_idx_idx..(leaf.first_prim_idx_idx + leaf.prim_count) {
         let prim_aabb = prim_aabbs[prim_idxs[i]];
@@ -119,10 +105,10 @@ fn blas_leaf_bounds(leaf: &BuildBlasLeaf, prim_idxs: &Vec<usize>, prim_aabbs: &V
 }
 
 fn find_best_plane(
-    leaf: &BuildBlasLeaf,
-    prim_idxs: &Vec<usize>,
-    prim_centroids: &Vec<Point3<f32>>,
-    prim_aabbs: &Vec<Aabb>,
+    leaf: &BuildBvhLeaf,
+    prim_idxs: &[usize],
+    prim_centroids: &[Point3<f32>],
+    prim_aabbs: &[Aabb],
     cost_function: &impl Fn(&Aabb, &Aabb, usize, usize) -> f32,
 ) -> (usize, f32) {
     const BINS: usize = 32;
@@ -206,14 +192,14 @@ fn find_best_plane(
 
 fn subdivide(
     node_idx: usize,
-    prim_idxs: &mut Vec<usize>,
-    prim_aabbs: &Vec<Aabb>,
-    prim_centroids: &Vec<Point3<f32>>,
-    nodes: &mut Vec<BuildBlasNode>,
+    prim_idxs: &mut [usize],
+    prim_aabbs: &[Aabb],
+    prim_centroids: &[Point3<f32>],
+    nodes: &mut Vec<BuildBvhNode>,
     cost_function: &impl Fn(&Aabb, &Aabb, usize, usize) -> f32,
 ) {
     match nodes[node_idx].kind {
-        BuildBlasNodeKind::Leaf(ref leaf) if leaf.prim_count > 2 => {
+        BuildBvhNodeKind::Leaf(ref leaf) if leaf.prim_count > 2 => {
             // get best plane to split along
             let (dimension, split_pos) =
                 find_best_plane(leaf, prim_idxs, prim_centroids, prim_aabbs, cost_function);
@@ -234,13 +220,13 @@ fn subdivide(
             }
 
             // create left child
-            let left_leaf = BuildBlasLeaf {
+            let left_leaf = BuildBvhLeaf {
                 first_prim_idx_idx: leaf.first_prim_idx_idx,
                 prim_count: partitions.0.len(),
             };
 
             // create right child
-            let right_leaf = BuildBlasLeaf {
+            let right_leaf = BuildBvhLeaf {
                 first_prim_idx_idx: leaf.first_prim_idx_idx + partitions.0.len(),
                 prim_count: partitions.1.len(),
             };
@@ -250,7 +236,7 @@ fn subdivide(
             let right_child_idx = insert_blas_leaf_node(right_leaf, nodes, prim_idxs, prim_aabbs);
 
             // update parent
-            nodes[node_idx].kind = BuildBlasNodeKind::InternalNode(BuildBlasInternalNode {
+            nodes[node_idx].kind = BuildBvhNodeKind::InternalNode(BuildBvhInternalNode {
                 left_child_idx,
                 right_child_idx,
             });
@@ -278,34 +264,43 @@ fn subdivide(
 }
 
 fn insert_blas_leaf_node(
-    leaf: BuildBlasLeaf,
-    nodes: &mut Vec<BuildBlasNode>,
-    prim_idxs: &Vec<usize>,
-    prim_aabbs: &Vec<Aabb>,
+    leaf: BuildBvhLeaf,
+    nodes: &mut Vec<BuildBvhNode>,
+    prim_idxs: &[usize],
+    prim_aabbs: &[Aabb],
 ) -> usize {
     let node_idx = nodes.len();
-    nodes.push(BuildBlasNode {
+    nodes.push(BuildBvhNode {
         aabb: blas_leaf_bounds(&leaf, prim_idxs, prim_aabbs),
-        kind: BuildBlasNodeKind::Leaf(leaf),
+        kind: BuildBvhNodeKind::Leaf(leaf),
     });
     node_idx
 }
 
-fn build_blas<T>(primitives: Vec<T>) -> Vec<BlBvhNode>
-where
-    T: Primitive,
-{
-    let prim_centroids = primitives.iter().map(|p| p.centroid()).collect::<Vec<_>>();
-    let prim_aabbs = primitives.iter().map(|p| p.aabb()).collect::<Vec<_>>();
-    let mut prim_idxs = (0..primitives.len()).collect::<Vec<_>>();
+pub fn build_bvh(
+    // the center of each primitive
+    prim_centroids: &[Point3<f32>],
+    // the bounding box of each primitive
+    prim_aabbs: &[Aabb],
+    // how much power is in each primitive
+    prim_luminances: &[f32],
+    // the meaning of this parameter varies depending on whether this is a top level or bottom level bvh
+    // if this is a top level bvh, then this is the instance id of each primitive
+    // if this is a bottom level bvh, then this is the primitive index of each primitive
+    prim_index_ids: &[u32],
+) -> Vec<BvhNode> {
+    let n_prims = prim_centroids.len();
+    assert_eq!(n_prims, prim_aabbs.len());
+
+    let mut prim_idxs = (0..n_prims).collect::<Vec<_>>();
 
     let mut nodes = vec![];
 
     // create root node
     let root_node_idx = insert_blas_leaf_node(
-        BuildBlasLeaf {
+        BuildBvhLeaf {
             first_prim_idx_idx: 0,
-            prim_count: primitives.len(),
+            prim_count: n_prims,
         },
         &mut nodes,
         &prim_idxs,
@@ -332,16 +327,19 @@ where
     let mut opt_bvh = nodes
         .into_iter()
         .map(|node| match node.kind {
-            BuildBlasNodeKind::Leaf(ref leaf) => BlBvhNode {
-                centroid: prim_centroids[prim_idxs[leaf.first_prim_idx_idx]].into(),
-                diagonal: node.aabb.diagonal().norm(),
-                luminance: primitives[prim_idxs[leaf.first_prim_idx_idx]].luminance(),
-                left_node_idx: u32::MAX,
-                right_node_idx_or_prim_idx: prim_idxs[leaf.first_prim_idx_idx] as u32,
-            },
-            BuildBlasNodeKind::InternalNode(ref internal_node) => BlBvhNode {
-                centroid: node.aabb.centroid().into(),
-                diagonal: node.aabb.diagonal().norm(),
+            BuildBvhNodeKind::Leaf(ref leaf) => {
+                let prim_idx = prim_idxs[leaf.first_prim_idx_idx];
+                BvhNode {
+                    min: prim_aabbs[prim_idx].min().coords.into(),
+                    max: prim_aabbs[prim_idx].max().coords.into(),
+                    luminance: prim_luminances[prim_idx],
+                    left_node_idx: u32::MAX,
+                    right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
+                }
+            }
+            BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
+                min: node.aabb.min().coords.into(),
+                max: node.aabb.max().coords.into(),
                 luminance: 0.0,
                 left_node_idx: internal_node.left_child_idx as u32,
                 right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
@@ -367,15 +365,15 @@ where
 }
 
 // creates a visualization of the blas by turning it into a mesh
-fn create_blas_visualization(blas_nodes: &Vec<BlBvhNode>) -> Vec<Vertex3D> {
+fn create_blas_visualization(blas_nodes: &Vec<BvhNode>) -> Vec<Vertex3D> {
     fn create_blas_visualization_inner(
         node_idx: usize,
-        blas_nodes: &Vec<BlBvhNode>,
+        blas_nodes: &Vec<BvhNode>,
         vertexes: &mut Vec<Vertex3D>,
     ) {
         let node = &blas_nodes[node_idx];
-        let loc = Point3::from(node.centroid);
-        let dims = Vector3::repeat(node.diagonal);
+        let loc = Point3::from((Vector3::from(node.min) + Vector3::from(node.max)) / 2.0);
+        let dims = Vector3::from(node.max) - Vector3::from(node.min);
         vertexes.extend(utils::cuboid(loc, dims));
 
         match blas_nodes[node_idx].left_node_idx {
@@ -398,7 +396,10 @@ fn create_blas_visualization(blas_nodes: &Vec<BlBvhNode>) -> Vec<Vertex3D> {
 }
 
 pub fn test_blas() -> Vec<Vertex3D> {
-    let mut primitives = vec![];
+    let mut prim_aabbs = vec![];
+    let mut prim_centroids = vec![];
+    let mut prim_luminances = vec![];
+    let mut prim_gl_ids = vec![];
     for i in 0..100 {
         // find a random point
         let x = rand::random::<f32>() * 40.0 - 20.0;
@@ -410,15 +411,13 @@ pub fn test_blas() -> Vec<Vertex3D> {
         let v1 = Point3::new(x, y + 0.1, z);
         let v2 = Point3::new(x, y, z + 0.1);
 
-        primitives.push(Triangle {
-            luminance,
-            v0,
-            v1,
-            v2,
-        });
+        prim_aabbs.push(Aabb::from_points(&[v0, v1, v2]));
+        prim_centroids.push(Point3::from((v0.coords + v1.coords + v2.coords) / 3.0));
+        prim_luminances.push(luminance);
+        prim_gl_ids.push(i as u32);
     }
 
-    let nodes = build_blas(primitives);
+    let nodes = build_bvh(&prim_centroids, &prim_aabbs, &prim_luminances, &prim_gl_ids);
 
     create_blas_visualization(&nodes)
 }
