@@ -43,7 +43,7 @@ use vulkano::{
 use winit::window::Window;
 
 use super::{
-    shader::cs,
+    pathtrace_shader,
     vertex::{InstanceData, Vertex3D},
 };
 
@@ -147,13 +147,6 @@ fn create_swapchain(
         .surface_capabilities(&surface, Default::default())
         .unwrap();
 
-    // Choosing the internal format that the images will have.
-    let image_format = device
-        .physical_device()
-        .surface_formats(&surface, Default::default())
-        .unwrap()[0]
-        .0;
-
     let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
 
     // Please take a look at the docs for the meaning of the parameters we didn't mention.
@@ -162,7 +155,7 @@ fn create_swapchain(
         surface.clone(),
         SwapchainCreateInfo {
             min_image_count: 8,
-            image_format,
+            image_format: Format::B8G8R8A8_SRGB,
             image_extent: window.inner_size().into(),
             image_usage: ImageUsage::TRANSFER_DST,
             composite_alpha: surface_capabilities
@@ -315,7 +308,7 @@ impl Renderer {
         let (swapchain, swapchain_images) = create_swapchain(device.clone(), surface.clone());
 
         let pipeline = {
-            let cs = cs::load(device.clone())
+            let cs = pathtrace_shader::load(device.clone())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
@@ -475,9 +468,6 @@ impl Renderer {
         )
         .unwrap();
 
-        // dbg!(image_index, self.frame_count);
-
-
         builder
             .bind_pipeline_compute(self.pipeline.clone())
             .unwrap()
@@ -494,7 +484,7 @@ impl Renderer {
             .push_constants(
                 self.pipeline.layout().clone(),
                 0,
-                cs::Camera {
+                pathtrace_shader::Camera {
                     eye: eye.coords,
                     front,
                     right,
@@ -505,7 +495,7 @@ impl Renderer {
                 },
             )
             .unwrap()
-            .dispatch([extent[0] / 8, extent[1] / 8, 1])
+            .dispatch([extent[0] / 32, extent[1] / 32, 1])
             .unwrap()
             .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
                 self.render_dests[image_index as usize].clone(),
