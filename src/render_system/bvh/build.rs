@@ -179,7 +179,6 @@ fn find_best_plane(
                 plane_primcount_to_left[plane],
                 plane_primcount_to_right[plane],
             );
-            dbg!(best_cost, cost);
             if cost < best_cost {
                 best_cost = cost;
                 best_dimension = dimension;

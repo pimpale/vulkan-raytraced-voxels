@@ -1,23 +1,6 @@
-pub mod vs {
+pub mod cs {
     vulkano_shaders::shader! {
-        ty: "vertex",
-        src: r"
-            #version 450
-
-            layout(location = 0) in vec2 position;
-            layout(location = 0) out vec2 out_uv;
-
-            void main() {
-                gl_Position = vec4(position, 0.0, 1.0);
-                out_uv = position;
-            }
-        ",
-    }
-}
-
-pub mod fs {
-    vulkano_shaders::shader! {
-        ty: "fragment",
+        ty: "compute",
         linalg_type: "nalgebra",
         src: r"
             #version 460
@@ -25,13 +8,13 @@ pub mod fs {
             #extension GL_EXT_scalar_block_layout: require
             #extension GL_EXT_buffer_reference2: require
             #extension GL_EXT_shader_explicit_arithmetic_types_int64: require
+            #extension GL_EXT_shader_explicit_arithmetic_types_int8: require
             #extension GL_EXT_nonuniform_qualifier: require
 
             #define M_PI 3.1415926535897932384626433832795
 
-            layout(location = 0) in vec2 in_uv;
-            layout(location = 0) out vec4 f_color;
-            
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
             layout(set = 0, binding = 0) uniform sampler s;
             layout(set = 0, binding = 1) uniform texture2D tex[];
 
@@ -60,30 +43,16 @@ pub mod fs {
                 InstanceData instance_data[];
             };
 
-            // struct LightBvhNode {
-            //     vec3 position;
-            //     float totalEmissivePower;
-            //     bool leaf;
-            //     uint left_child;
-            //     uint right_child;
-            //     bool has_right_primitive;
-            //     uint left_primitive_instance_index;
-            //     uint left_primitive_index;
-            //     uint right_primitive_instance_index;
-            //     uint right_primitive_index;
-            // };
-
-            // layout(set = 1, binding = 3, scalar) readonly buffer LightBvh {
-            //     LightBvhNode nodes[];
-            // };
-
+            layout(set = 1, binding = 2, scalar) writeonly buffer Outputs {
+                u8vec4 out_color[];
+            };
 
             layout(push_constant, scalar) uniform Camera {
                 vec3 eye;
                 vec3 front;
                 vec3 up;
                 vec3 right;
-                float aspect;
+                uvec2 screen_size;
                 uint frame;
                 uint samples;
             } camera;
@@ -344,12 +313,18 @@ pub mod fs {
                 );
             }
 
+            vec2 screen_to_uv(uvec2 screen, uvec2 screen_size) {
+                return 2*vec2(screen)/vec2(screen_size) - 1.0;
+            }
+
             // const uint SAMPLES_PER_PIXEL = 1;
             const uint MAX_BOUNCES = 5;
 
             void main() {
                 uint SAMPLES_PER_PIXEL = camera.samples;
                 
+                vec2 in_uv = screen_to_uv(gl_GlobalInvocationID.xy, camera.screen_size);
+
                 uint pixel_seed = camera.frame;
                 pixel_seed = murmur3_combinef(pixel_seed, in_uv.x);
                 pixel_seed = murmur3_combinef(pixel_seed, in_uv.y);
@@ -359,8 +334,9 @@ pub mod fs {
                 float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
 
                 // initial ray origin and direction
+                float aspect = float(camera.screen_size.x) / float(camera.screen_size.y);
                 vec3 first_origin = camera.eye;
-                vec3 first_direction = normalize(in_uv.x * camera.right * camera.aspect + in_uv.y * camera.up + camera.front);
+                vec3 first_direction = normalize(in_uv.x * camera.right * aspect + in_uv.y * camera.up + camera.front);
                 
                 // do the first cast, which is deterministic
                 IntersectionInfo first_intersection_info = getIntersectionInfo(first_origin, first_direction);
@@ -404,7 +380,7 @@ pub mod fs {
             
                 // average the samples
                 vec3 pixel_color = color / float(SAMPLES_PER_PIXEL);
-                f_color = vec4(pixel_color, 1.0);
+                out_color[gl_GlobalInvocationID.y*camera.screen_size.x + gl_GlobalInvocationID.x] = u8vec4(pixel_color*255, 255);
             }
         ",
     }

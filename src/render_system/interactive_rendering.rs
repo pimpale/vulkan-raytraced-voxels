@@ -1,15 +1,14 @@
 use core::panic;
 use std::sync::Arc;
 
-use image::{DynamicImage, RgbImage, RgbaImage};
-use nalgebra::{Point3, Vector3};
+use image::RgbaImage;
+use nalgebra::{Point3, Vector2, Vector3};
 use vulkano::{
     acceleration_structure::AccelerationStructure,
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        CopyBufferToImageInfo, PrimaryCommandBufferAbstract, RenderingAttachmentInfo,
-        RenderingInfo,
+        CopyBufferToImageInfo, PrimaryCommandBufferAbstract,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, layout::DescriptorBindingFlags,
@@ -21,28 +20,22 @@ use vulkano::{
     },
     format::Format,
     image::{
-        sampler::{Sampler, SamplerAddressMode, SamplerCreateInfo},
-        view::ImageView,
-        Image, ImageCreateInfo, ImageType, ImageUsage, SampleCount,
+        sampler::Sampler, view::ImageView, Image, ImageCreateInfo, ImageFormatInfo, ImageType,
+        ImageUsage,
     },
     instance::Instance,
-    memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
-    pipeline::{
-        graphics::{
-            color_blend::{ColorBlendAttachmentState, ColorBlendState},
-            input_assembly::InputAssemblyState,
-            multisample::MultisampleState,
-            rasterization::RasterizationState,
-            subpass::PipelineRenderingCreateInfo,
-            vertex_input::{Vertex, VertexDefinition},
-            viewport::{Viewport, ViewportState},
-            GraphicsPipelineCreateInfo,
+    memory::{
+        self,
+        allocator::{
+            AllocationCreateInfo, MemoryAllocatePreference, MemoryTypeFilter,
+            StandardMemoryAllocator,
         },
-        layout::PipelineDescriptorSetLayoutCreateInfo,
-        DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
-        PipelineShaderStageCreateInfo,
     },
-    render_pass::AttachmentStoreOp,
+    pipeline::{
+        compute::ComputePipelineCreateInfo, graphics::viewport::Viewport,
+        layout::PipelineDescriptorSetLayoutCreateInfo, ComputePipeline, Pipeline,
+        PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
+    },
     swapchain::{self, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo},
     sync::{self, GpuFuture},
     Validated, VulkanError,
@@ -50,7 +43,7 @@ use vulkano::{
 use winit::window::Window;
 
 use super::{
-    shader::{fs, vs},
+    shader::cs,
     vertex::{InstanceData, Vertex3D},
 };
 
@@ -69,7 +62,9 @@ pub fn get_device_for_rendering_on(
         buffer_device_address: true,
         dynamic_rendering: true,
         ray_query: true,
+        shader_int8: true,
         shader_int64: true,
+        storage_buffer8_bit_access: true,
         runtime_descriptor_array: true,
         descriptor_binding_variable_descriptor_count: true,
         ..Features::empty()
@@ -85,7 +80,8 @@ pub fn get_device_for_rendering_on(
                 .iter()
                 .enumerate()
                 .position(|(i, q)| {
-                    q.queue_flags.intersects(QueueFlags::GRAPHICS)
+                    q.queue_flags
+                        .intersects(QueueFlags::GRAPHICS | QueueFlags::COMPUTE)
                         && p.surface_support(i as u32, &surface).unwrap_or(false)
                 });
 
@@ -140,35 +136,6 @@ pub fn get_device_for_rendering_on(
     (device, general_queue, transfer_queue)
 }
 
-#[derive(Clone, BufferContents, Vertex)]
-#[repr(C)]
-struct Vertex2D {
-    #[format(R32G32_SFLOAT)]
-    position: [f32; 2],
-}
-
-// The quad buffer that covers the entire surface
-static QUAD: [Vertex2D; 6] = [
-    Vertex2D {
-        position: [-1.0, -1.0],
-    },
-    Vertex2D {
-        position: [-1.0, 1.0],
-    },
-    Vertex2D {
-        position: [1.0, -1.0],
-    },
-    Vertex2D {
-        position: [1.0, 1.0],
-    },
-    Vertex2D {
-        position: [1.0, -1.0],
-    },
-    Vertex2D {
-        position: [-1.0, 1.0],
-    },
-];
-
 fn create_swapchain(
     device: Arc<Device>,
     surface: Arc<Surface>,
@@ -194,10 +161,10 @@ fn create_swapchain(
         device.clone(),
         surface.clone(),
         SwapchainCreateInfo {
-            min_image_count: surface_capabilities.min_image_count,
+            min_image_count: 8,
             image_format,
             image_extent: window.inner_size().into(),
-            image_usage: ImageUsage::COLOR_ATTACHMENT,
+            image_usage: ImageUsage::TRANSFER_DST,
             composite_alpha: surface_capabilities
                 .supported_composite_alpha
                 .into_iter()
@@ -211,21 +178,31 @@ fn create_swapchain(
 }
 
 /// This function is called once during initialization, then again whenever the window is resized.
-fn window_size_dependent_setup(images: &[Arc<Image>]) -> (Vec<Arc<ImageView>>, Viewport) {
-    let extent = images[0].extent();
-
-    let viewport = Viewport {
-        offset: [0.0, 0.0],
-        extent: [extent[0] as f32, extent[1] as f32],
-        depth_range: 0.0..=1.0,
-    };
-
-    let image_views = images
+fn window_size_dependent_setup(
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    images: &[Arc<Image>],
+) -> Vec<Subbuffer<[u8]>> {
+    let render_dests = images
         .iter()
-        .map(|image| ImageView::new_default(image.clone()).unwrap())
-        .collect::<Vec<_>>();
+        .map(|image| {
+            let extent = image.extent();
 
-    (image_views, viewport)
+            Buffer::new_slice::<u8>(
+                memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+                (extent[0] * extent[1] * 4) as u64,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    render_dests
 }
 
 pub fn get_surface_extent(surface: &Surface) -> [u32; 2] {
@@ -234,18 +211,17 @@ pub fn get_surface_extent(surface: &Surface) -> [u32; 2] {
 }
 
 pub struct Renderer {
-    viewport: Viewport,
     surface: Arc<Surface>,
     device: Arc<Device>,
     queue: Arc<Queue>,
-    quad_buffer: Subbuffer<[Vertex2D]>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     swapchain: Arc<Swapchain>,
     material_descriptor_set: Arc<PersistentDescriptorSet>,
-    attachment_image_views: Vec<Arc<ImageView>>,
-    pipeline: Arc<GraphicsPipeline>,
+    render_dests: Vec<Subbuffer<[u8]>>,
+    swapchain_images: Vec<Arc<Image>>,
+    pipeline: Arc<ComputePipeline>,
     wdd_needs_rebuild: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
     frame_count: u32,
@@ -336,30 +312,19 @@ impl Renderer {
 
         let device = memory_allocator.device().clone();
 
-        let (swapchain, images) = create_swapchain(device.clone(), surface.clone());
+        let (swapchain, swapchain_images) = create_swapchain(device.clone(), surface.clone());
 
         let pipeline = {
-            let vs = vs::load(device.clone())
-                .unwrap()
-                .entry_point("main")
-                .unwrap();
-            let fs = fs::load(device.clone())
+            let cs = cs::load(device.clone())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
 
-            let vertex_input_state = Vertex2D::per_vertex()
-                .definition(&vs.info().input_interface)
-                .unwrap();
-
-            let stages = [
-                PipelineShaderStageCreateInfo::new(vs),
-                PipelineShaderStageCreateInfo::new(fs),
-            ];
+            let stage = PipelineShaderStageCreateInfo::new(cs);
 
             let layout = {
                 let mut layout_create_info =
-                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
 
                 // Adjust the info for set 0, binding 1 to make it variable with texture_atlas.len() descriptors.
                 let binding = layout_create_info.set_layouts[0]
@@ -378,52 +343,15 @@ impl Renderer {
                 .unwrap()
             };
 
-            let subpass = PipelineRenderingCreateInfo {
-                color_attachment_formats: vec![Some(swapchain.image_format())],
-                ..Default::default()
-            };
-
-            GraphicsPipeline::new(
+            ComputePipeline::new(
                 device.clone(),
                 None,
-                GraphicsPipelineCreateInfo {
-                    stages: stages.into_iter().collect(),
-                    vertex_input_state: Some(vertex_input_state),
-                    input_assembly_state: Some(InputAssemblyState::default()),
-                    viewport_state: Some(ViewportState::default()),
-                    rasterization_state: Some(RasterizationState::default()),
-                    multisample_state: Some(MultisampleState {
-                        rasterization_samples: SampleCount::Sample1,
-                        ..Default::default()
-                    }),
-                    color_blend_state: Some(ColorBlendState::with_attachment_states(
-                        subpass.color_attachment_formats.len() as u32,
-                        ColorBlendAttachmentState::default(),
-                    )),
-                    dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                    subpass: Some(subpass.into()),
-                    ..GraphicsPipelineCreateInfo::layout(layout)
-                },
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
             )
             .unwrap()
         };
 
-        let (attachment_image_views, viewport) = window_size_dependent_setup(&images);
-
-        let quad_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            QUAD.iter().cloned(),
-        )
-        .unwrap();
+        let render_dests = window_size_dependent_setup(memory_allocator.clone(), &swapchain_images);
 
         let texture_atlas = load_textures(
             texture_atlas,
@@ -455,18 +383,17 @@ impl Renderer {
             swapchain,
             pipeline,
             descriptor_set_allocator,
-            attachment_image_views,
-            viewport,
+            render_dests,
+            swapchain_images,
             memory_allocator,
             wdd_needs_rebuild: false,
-            quad_buffer,
             material_descriptor_set,
             frame_count: 0,
         }
     }
 
     pub fn n_swapchain_images(&self) -> usize {
-        self.attachment_image_views.len()
+        self.swapchain_images.len()
     }
 
     pub fn rebuild(&mut self, extent: [u32; 2]) {
@@ -478,11 +405,9 @@ impl Renderer {
             })
             .expect("failed to recreate swapchain");
 
-        let (new_attachment_image_views, new_viewport) = window_size_dependent_setup(&new_images);
-
         self.swapchain = new_swapchain;
-        self.attachment_image_views = new_attachment_image_views;
-        self.viewport = new_viewport;
+        self.render_dests = window_size_dependent_setup(self.memory_allocator.clone(), &new_images);
+        self.swapchain_images = new_images;
     }
 
     pub fn render(
@@ -544,30 +469,20 @@ impl Renderer {
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_data),
+                WriteDescriptorSet::buffer(2, self.render_dests[image_index as usize].clone()),
             ],
             [],
         )
         .unwrap();
 
+        // dbg!(image_index, self.frame_count);
+
+
         builder
-            .begin_rendering(RenderingInfo {
-                color_attachments: vec![Some(RenderingAttachmentInfo {
-                    store_op: AttachmentStoreOp::Store,
-                    ..RenderingAttachmentInfo::image_view(
-                        self.attachment_image_views[image_index as usize].clone(),
-                    )
-                })],
-                ..Default::default()
-            })
-            .unwrap()
-            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
-            .unwrap()
-            .bind_pipeline_graphics(self.pipeline.clone())
-            .unwrap()
-            .bind_vertex_buffers(0, self.quad_buffer.clone())
+            .bind_pipeline_compute(self.pipeline.clone())
             .unwrap()
             .bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
+                PipelineBindPoint::Compute,
                 self.pipeline.layout().clone(),
                 0,
                 (
@@ -579,20 +494,23 @@ impl Renderer {
             .push_constants(
                 self.pipeline.layout().clone(),
                 0,
-                fs::Camera {
+                cs::Camera {
                     eye: eye.coords,
                     front,
                     right,
                     up,
-                    aspect: extent[0] as f32 / extent[1] as f32,
+                    screen_size: [extent[0], extent[1]].into(),
                     frame: self.frame_count,
                     samples,
                 },
             )
             .unwrap()
-            .draw(self.quad_buffer.len() as u32, 1, 0, 0)
+            .dispatch([extent[0] / 8, extent[1] / 8, 1])
             .unwrap()
-            .end_rendering()
+            .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
+                self.render_dests[image_index as usize].clone(),
+                self.swapchain_images[image_index as usize].clone(),
+            ))
             .unwrap();
 
         let command_buffer = builder.build().unwrap();
