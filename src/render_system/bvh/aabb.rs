@@ -41,20 +41,6 @@ impl Aabb {
         }
     }
 
-    pub fn diagonal(&self) -> Vector3<f32> {
-        match self {
-            Aabb::Empty => Vector3::zeros(),
-            Aabb::NonEmpty { min, max } => max - min,
-        }
-    }
-
-    pub fn centroid(&self) -> Point3<f32> {
-        match self {
-            Aabb::Empty => Point3::origin(),
-            Aabb::NonEmpty { min, max } => Point3::from((min.coords + max.coords) / 2.0),
-        }
-    }
-
     pub fn area(&self) -> f32 {
         match self {
             Aabb::Empty => 0.0,

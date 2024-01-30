@@ -268,6 +268,7 @@ impl GameWorld {
         let (top_level_acceleration_structure, instance_data, build_future) =
             self.scene.borrow_mut().get_tlas();
 
+            let t0 = std::time::Instant::now();
         // render to screen
         self.renderer.render(
             build_future,
@@ -279,6 +280,8 @@ impl GameWorld {
             up,
             rendering_preferences.samples,
         );
+
+        dbg!(t0.elapsed());
 
         // at this point we can now garbage collect removed entities from the last step (but not this step yet!)
         // this is because the the entities might potentially be in use until the next frame has started rendering

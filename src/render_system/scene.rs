@@ -27,7 +27,7 @@ use vulkano::{
     DeviceSize, Packed24_8,
 };
 
-use crate::render_system::bvh::{self, aabb::Aabb,};
+use crate::render_system::bvh::{self, aabb::Aabb};
 
 use super::{
     bvh::BvhNode,
@@ -210,6 +210,7 @@ where
                         |Object {
                              isometry,
                              vertex_buffer,
+                             light_bl_bvh_buffer,
                              ..
                          }| InstanceData {
                             transform: {
@@ -217,7 +218,12 @@ where
                                 let mat3x4: Matrix3x4<f32> = mat4.fixed_view::<3, 4>(0, 0).into();
                                 mat3x4.into()
                             },
-                            bvh_node_buffer_addr: 0,
+                            bvh_node_buffer_addr: match light_bl_bvh_buffer {
+                                Some(light_bl_bvh_buffer) => {
+                                    light_bl_bvh_buffer.device_address().unwrap().get()
+                                }
+                                None => 0,
+                            },
                             vertex_buffer_addr: vertex_buffer.device_address().unwrap().get(),
                         },
                     )
@@ -301,7 +307,6 @@ where
         }
     }
 }
-
 
 #[derive(Clone)]
 pub enum SceneUploadedObjectHandle {
@@ -407,7 +412,6 @@ impl SceneUploader {
         }
     }
 }
-
 
 fn create_top_level_acceleration_structure(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
