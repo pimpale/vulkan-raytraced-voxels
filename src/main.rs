@@ -142,15 +142,15 @@ fn build_scene(
     // );
 
     // add blas test
-    let blas_test_mesh = render_system::bvh::build::test_blas();
-    world.add_entity(
-        4,
-        EntityCreationData {
-            physics: None,
-            mesh: uploader.upload_object(blas_test_mesh),
-            isometry: Isometry3::identity(),
-        },
-    );
+    // let blas_test_mesh = render_system::bvh::build::test_blas();
+    // world.add_entity(
+    //     4,
+    //     EntityCreationData {
+    //         physics: None,
+    //         mesh: uploader.upload_object(blas_test_mesh),
+    //         isometry: Isometry3::identity(),
+    //     },
+    // );
 
     world
 }

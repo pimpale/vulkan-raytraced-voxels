@@ -495,7 +495,7 @@ impl Renderer {
                 },
             )
             .unwrap()
-            .dispatch([extent[0] / 32, extent[1] / 32, 1])
+            .dispatch([extent[0] / 32 + 1, extent[1] / 32 + 1, 1])
             .unwrap()
             .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
                 self.render_dests[image_index as usize].clone(),

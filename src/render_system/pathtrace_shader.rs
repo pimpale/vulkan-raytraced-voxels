@@ -320,8 +320,12 @@ vulkano_shaders::shader! {
         const uint MAX_BOUNCES = 5;
 
         void main() {
+            if(gl_GlobalInvocationID.x >= camera.screen_size.x || gl_GlobalInvocationID.y >= camera.screen_size.y) {
+                return;
+            }
+
             uint SAMPLES_PER_PIXEL = camera.samples;
-            
+
             vec2 in_uv = screen_to_uv(gl_GlobalInvocationID.xy, camera.screen_size);
 
             uint pixel_seed = camera.frame;
