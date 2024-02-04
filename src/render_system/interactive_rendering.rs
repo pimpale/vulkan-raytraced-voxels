@@ -464,7 +464,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_data),
-                // WriteDescriptorSet::buffer(2, luminance_bvh),
+                WriteDescriptorSet::buffer(2, luminance_bvh),
                 WriteDescriptorSet::buffer(3, self.render_dests[image_index as usize].clone()),
             ],
             [],

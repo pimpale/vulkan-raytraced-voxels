@@ -266,6 +266,8 @@ where
                 )
                 .unzip();
 
+                dbg!(&instance_ids);
+
             let light_tl_bvh = if centroids.len() == 0 {
                 vec![BvhNode::dummy()]
             } else {
@@ -275,7 +277,7 @@ where
             let light_tl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+                    usage: BufferUsage::STORAGE_BUFFER,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
