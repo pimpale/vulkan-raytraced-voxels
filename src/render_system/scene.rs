@@ -266,8 +266,6 @@ where
                 )
                 .unzip();
 
-                dbg!(&instance_ids);
-
             let light_tl_bvh = if centroids.len() == 0 {
                 vec![BvhNode::dummy()]
             } else {
@@ -441,6 +439,9 @@ impl SceneUploader {
                 Aabb::from_points(&[light_bl_bvh[0].min.into(), light_bl_bvh[0].max.into()]);
             let luminance = light_bl_bvh[0].luminance;
 
+            dbg!(&light_bl_bvh);
+
+
             let light_bl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
@@ -455,6 +456,8 @@ impl SceneUploader {
                 light_bl_bvh,
             )
             .unwrap();
+
+
 
             SceneUploadedObjectHandle::Uploaded {
                 vertex_buffer,

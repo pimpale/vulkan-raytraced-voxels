@@ -200,7 +200,7 @@ vulkano_shaders::shader! {
 
             vec3 color = normalize(vec3(murmur3_finalizef(prim_id), murmur3_finalizef(murmur3_combine(prim_id, 1)), murmur3_finalizef(murmur3_combine(prim_id, 2))));
 
-            return 0.01* color* nodeImportance(point, normal, id.transform, node);
+            return 0.01 * color * nodeImportance(point, normal, id.transform, node);
         }
 
         struct IntersectionCoordinateSystem {

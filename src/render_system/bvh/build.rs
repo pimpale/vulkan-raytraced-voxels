@@ -234,12 +234,6 @@ fn subdivide(
             let left_child_idx = insert_blas_leaf_node(left_leaf, nodes, prim_idxs, prim_aabbs);
             let right_child_idx = insert_blas_leaf_node(right_leaf, nodes, prim_idxs, prim_aabbs);
 
-            // update parent
-            nodes[node_idx].kind = BuildBvhNodeKind::InternalNode(BuildBvhInternalNode {
-                left_child_idx,
-                right_child_idx,
-            });
-
             // recurse
             subdivide(
                 left_child_idx,
@@ -257,6 +251,34 @@ fn subdivide(
                 nodes,
                 cost_function,
             );
+
+            nodes[node_idx].kind = BuildBvhNodeKind::InternalNode(BuildBvhInternalNode {
+                left_child_idx,
+                right_child_idx,
+            });
+        }
+        BuildBvhNodeKind::Leaf(ref leaf) if leaf.prim_count == 2 => {
+            // create left child
+            let left_leaf = BuildBvhLeaf {
+                first_prim_idx_idx: leaf.first_prim_idx_idx,
+                prim_count: 1,
+            };
+
+            // create right child
+            let right_leaf = BuildBvhLeaf {
+                first_prim_idx_idx: leaf.first_prim_idx_idx + 1,
+                prim_count: 1,
+            };
+
+            // insert children
+            let left_child_idx = insert_blas_leaf_node(left_leaf, nodes, prim_idxs, prim_aabbs);
+            let right_child_idx = insert_blas_leaf_node(right_leaf, nodes, prim_idxs, prim_aabbs);
+
+            // update parent
+            nodes[node_idx].kind = BuildBvhNodeKind::InternalNode(BuildBvhInternalNode {
+                left_child_idx,
+                right_child_idx,
+            });
         }
         _ => {}
     }
@@ -327,6 +349,7 @@ pub fn build_bvh(
         .into_iter()
         .map(|node| match node.kind {
             BuildBvhNodeKind::Leaf(ref leaf) => {
+                assert!(leaf.prim_count == 1);
                 let prim_idx = prim_idxs[leaf.first_prim_idx_idx];
                 BvhNode {
                     min: prim_aabbs[prim_idx].min().coords.into(),
