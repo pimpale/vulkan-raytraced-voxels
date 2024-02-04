@@ -64,6 +64,7 @@ pub struct Scene<K> {
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
     cached_instance_data: Option<Subbuffer<[InstanceData]>>,
+    cached_luminance_bvh: Option<Subbuffer<[BvhNode]>>,
     // last frame state
     cached_tlas_state: TopLevelAccelerationStructureState,
     // command buffer all building commands are submitted to
@@ -101,6 +102,7 @@ where
             n_swapchain_images,
             cached_tlas: None,
             cached_instance_data: None,
+            cached_luminance_bvh: None,
             cached_tlas_state: TopLevelAccelerationStructureState::NeedsRebuild,
             blas_command_buffer: command_buffer,
         }
@@ -188,6 +190,7 @@ where
     ) -> (
         Arc<AccelerationStructure>,
         Subbuffer<[InstanceData]>,
+        Subbuffer<[BvhNode]>,
         Box<dyn GpuFuture>,
     ) {
         // rebuild the instance buffer if any object was moved, added, or removed
@@ -231,6 +234,35 @@ where
             )
             .unwrap();
             self.cached_instance_data = Some(instance_data);
+
+            let bvh_data = &self
+                .objects
+                .values()
+                .flatten()
+                .filter_map(
+                    |Object {
+                         light_aabb,
+                         luminance,
+                         light_bl_bvh_buffer,
+                         isometry,
+                         ..
+                     }| {
+                        match light_bl_bvh_buffer {
+                            Some(light_bl_bvh_buffer) => Some((
+                                light_aabb.transform(isometry),
+                                luminance,
+                                light_bl_bvh_buffer.clone(),
+                            )),
+                            None => None,
+                        }
+                    },
+                )
+                .collect::<Vec<_>>();
+
+            let centroids = bvh_data
+                .iter()
+                .map(|(aabb, _, _)| aabb.centroid())
+                .collect::<Vec<_>>();
         }
 
         let future = match self.cached_tlas_state {
@@ -296,6 +328,7 @@ where
         return (
             self.cached_tlas.clone().unwrap(),
             self.cached_instance_data.clone().unwrap(),
+            self.cached_luminance_bvh.clone().unwrap(),
             future,
         );
     }

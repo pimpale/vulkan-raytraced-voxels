@@ -43,8 +43,7 @@ use vulkano::{
 use winit::window::Window;
 
 use super::{
-    pathtrace_shader,
-    vertex::{InstanceData, Vertex3D},
+    bvh::BvhNode, pathtrace_shader, vertex::{InstanceData, Vertex3D}
 };
 
 pub fn get_device_for_rendering_on(
@@ -408,6 +407,7 @@ impl Renderer {
         build_future: Box<dyn GpuFuture>,
         top_level_acceleration_structure: Arc<AccelerationStructure>,
         instance_data: Subbuffer<[InstanceData]>,
+        luminance_bvh: Subbuffer<[BvhNode]>,
         eye: Point3<f32>,
         front: Vector3<f32>,
         right: Vector3<f32>,
@@ -462,7 +462,8 @@ impl Renderer {
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_data),
-                WriteDescriptorSet::buffer(2, self.render_dests[image_index as usize].clone()),
+                WriteDescriptorSet::buffer(2, luminance_bvh),
+                WriteDescriptorSet::buffer(3, self.render_dests[image_index as usize].clone()),
             ],
             [],
         )

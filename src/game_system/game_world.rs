@@ -265,7 +265,7 @@ impl GameWorld {
             let camera = self.camera.borrow();
             (camera.eye_front_right_up(), camera.rendering_preferences())
         };
-        let (top_level_acceleration_structure, instance_data, build_future) =
+        let (top_level_acceleration_structure, instance_data, luminance_bvh, build_future) =
             self.scene.borrow_mut().get_tlas();
 
         // render to screen
@@ -273,6 +273,7 @@ impl GameWorld {
             build_future,
             top_level_acceleration_structure,
             instance_data,
+            luminance_bvh,
             eye,
             front,
             right,

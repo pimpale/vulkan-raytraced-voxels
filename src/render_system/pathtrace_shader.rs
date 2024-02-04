@@ -42,7 +42,19 @@ vulkano_shaders::shader! {
             InstanceData instance_data[];
         };
 
-        layout(set = 1, binding = 2, scalar) writeonly buffer Outputs {
+        struct BvhNode {
+            vec3 min;
+            vec3 max;
+            float luminance;
+            uint left_node_idx;
+            uint right_node_idx_or_prim_idx;
+        };
+
+        layout(set = 1, binding = 1, scalar) readonly buffer TlBvhNodeBuffer {
+            BvhNode bvh_nodes[];
+        };
+
+        layout(set = 1, binding = 3, scalar) writeonly buffer Outputs {
             u8vec4 out_color[];
         };
 
@@ -324,22 +336,22 @@ vulkano_shaders::shader! {
                 return;
             }
 
+            uint pixel_seed = camera.frame;
+            pixel_seed = murmur3_combine(pixel_seed, gl_GlobalInvocationID.x);
+            pixel_seed = murmur3_combine(pixel_seed, gl_GlobalInvocationID.y);
+
             uint SAMPLES_PER_PIXEL = camera.samples;
 
-            vec2 in_uv = screen_to_uv(gl_GlobalInvocationID.xy, camera.screen_size);
-
-            uint pixel_seed = camera.frame;
-            pixel_seed = murmur3_combinef(pixel_seed, in_uv.x);
-            pixel_seed = murmur3_combinef(pixel_seed, in_uv.y);
 
             vec3 bounce_emissivity[MAX_BOUNCES];
             vec3 bounce_reflectivity[MAX_BOUNCES];
             float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
 
             // initial ray origin and direction
+            vec2 uv = screen_to_uv(gl_GlobalInvocationID.xy, camera.screen_size);
             float aspect = float(camera.screen_size.x) / float(camera.screen_size.y);
             vec3 first_origin = camera.eye;
-            vec3 first_direction = normalize(in_uv.x * camera.right * aspect + in_uv.y * camera.up + camera.front);
+            vec3 first_direction = normalize(uv.x * camera.right * aspect + uv.y * camera.up + camera.front);
             
             // do the first cast, which is deterministic
             IntersectionInfo first_intersection_info = getIntersectionInfo(first_origin, first_direction);

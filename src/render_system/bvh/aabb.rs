@@ -1,4 +1,4 @@
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Aabb {
@@ -64,4 +64,24 @@ impl Aabb {
             Aabb::NonEmpty { max, .. } => *max,
         }
     }
+
+    pub fn transform(&self, transform: &Isometry3<f32>) -> Aabb {
+        match self {
+            Aabb::Empty => Aabb::Empty,
+            Aabb::NonEmpty { min, max } => {
+                let corners = [
+                    transform * min,
+                    transform * Point3::new(min.x, min.y, max.z),
+                    transform * Point3::new(min.x, max.y, min.z),
+                    transform * Point3::new(min.x, max.y, max.z),
+                    transform * Point3::new(max.x, min.y, min.z),
+                    transform * Point3::new(max.x, min.y, max.z),
+                    transform * Point3::new(max.x, max.y, min.z),
+                    transform * max,
+                ];
+                Aabb::from_points(&corners)
+            }
+        }
+    }
+
 }
