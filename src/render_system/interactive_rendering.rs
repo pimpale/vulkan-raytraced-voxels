@@ -43,7 +43,9 @@ use vulkano::{
 use winit::window::Window;
 
 use super::{
-    bvh::BvhNode, pathtrace_shader, vertex::{InstanceData, Vertex3D}
+    bvh::BvhNode,
+    pathtrace_shader,
+    vertex::{InstanceData, Vertex3D},
 };
 
 pub fn get_device_for_rendering_on(
@@ -462,7 +464,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_data),
-                WriteDescriptorSet::buffer(2, luminance_bvh),
+                // WriteDescriptorSet::buffer(2, luminance_bvh),
                 WriteDescriptorSet::buffer(3, self.render_dests[image_index as usize].clone()),
             ],
             [],

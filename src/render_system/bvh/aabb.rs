@@ -65,6 +65,13 @@ impl Aabb {
         }
     }
 
+    pub fn centroid(&self) -> Point3<f32> {
+        match self {
+            Aabb::Empty => Point3::origin(),
+            Aabb::NonEmpty { min, max } => Point3::from((min.coords + max.coords) / 2.0),
+        }
+    }
+
     pub fn transform(&self, transform: &Isometry3<f32>) -> Aabb {
         match self {
             Aabb::Empty => Aabb::Empty,

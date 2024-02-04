@@ -19,5 +19,18 @@ pub struct BvhNode {
     // if this BVH represents a bottom level BVH, then `Index` is a GLSL PrimitiveIndex
     // if this BVH represents a top level BVH, then `Index` is a GLSL InstanceID
     // otherwise, it is the index of the right node
+    // if this is 0xFFFFFFFF and left_node_idx is 0xFFFFFFFF, then this means that this is a dummy node
     pub right_node_idx_or_prim_idx: u32,
+}
+
+impl BvhNode {
+    pub fn dummy() -> BvhNode {
+        BvhNode {
+            min: [0.0; 3],
+            max: [0.0; 3],
+            luminance: 0.0,
+            left_node_idx: 0xFFFFFFFF,
+            right_node_idx_or_prim_idx: 0xFFFFFFFF,
+        }
+    }
 }

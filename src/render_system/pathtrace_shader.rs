@@ -135,6 +135,20 @@ vulkano_shaders::shader! {
             return normalize(bary.x * (v0-orig) + bary.y * (v1-orig) + bary.z * (v2-orig));
         }
 
+        // gets the importance of a node relative to a point on a surface
+        float nodeImportance(vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
+            float min_distance = length(node.max - node.min);
+            vec3 centroid_bvhspace = (node.max + node.min) / 2.0;
+            vec3 centroid_worldspace = transform * vec4(centroid_bvhspace, 1.0);
+            float true_distance = length(centroid_worldspace - point);
+            float distance = min(true_distance, min_distance);
+            return node.luminance / (distance * distance);
+        }
+
+        float traverseBvh() {
+            return 0.0;
+        }
+
         struct IntersectionCoordinateSystem {
             vec3 normal;
             vec3 tangent;
@@ -394,7 +408,7 @@ vulkano_shaders::shader! {
             }
         
             // average the samples
-            vec3 pixel_color = color / float(SAMPLES_PER_PIXEL);
+            vec3 pixel_color = (1.5*color) / float(SAMPLES_PER_PIXEL);
             out_color[gl_GlobalInvocationID.y*camera.screen_size.x + gl_GlobalInvocationID.x] = u8vec4(pixel_color.zyx*255, 255);
         }
     ",

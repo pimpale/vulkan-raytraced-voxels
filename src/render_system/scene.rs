@@ -235,34 +235,59 @@ where
             .unwrap();
             self.cached_instance_data = Some(instance_data);
 
-            let bvh_data = &self
+            let ((centroids, aabbs), (luminances, instance_ids)): (
+                (Vec<_>, Vec<_>),
+                (Vec<_>, Vec<_>),
+            ) = self
                 .objects
                 .values()
                 .flatten()
+                .enumerate()
                 .filter_map(
-                    |Object {
-                         light_aabb,
-                         luminance,
-                         light_bl_bvh_buffer,
-                         isometry,
-                         ..
-                     }| {
-                        match light_bl_bvh_buffer {
-                            Some(light_bl_bvh_buffer) => Some((
-                                light_aabb.transform(isometry),
-                                luminance,
-                                light_bl_bvh_buffer.clone(),
-                            )),
-                            None => None,
+                    |(
+                        i,
+                        Object {
+                            light_aabb,
+                            luminance,
+                            isometry,
+                            ..
+                        },
+                    )| {
+                        if *luminance > 0.0 {
+                            let transformed = light_aabb.transform(isometry);
+                            Some((
+                                (transformed.centroid(), transformed),
+                                (*luminance, i as u32),
+                            ))
+                        } else {
+                            None
                         }
                     },
                 )
-                .collect::<Vec<_>>();
+                .unzip();
 
-            let centroids = bvh_data
-                .iter()
-                .map(|(aabb, _, _)| aabb.centroid())
-                .collect::<Vec<_>>();
+            let light_tl_bvh = if centroids.len() == 0 {
+                vec![BvhNode::dummy()]
+            } else {
+                bvh::build::build_bvh(&centroids, &aabbs, &luminances, &instance_ids)
+            };
+
+            let light_tl_bvh_buffer = Buffer::from_iter(
+                self.memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                light_tl_bvh,
+            )
+            .unwrap();
+
+            self.cached_luminance_bvh = Some(light_tl_bvh_buffer);
         }
 
         let future = match self.cached_tlas_state {
