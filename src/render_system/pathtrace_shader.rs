@@ -119,6 +119,112 @@ vulkano_shaders::shader! {
             return floatConstruct(murmur3_finalize(h));
         }
 
+        float lengthSquared(vec3 v) {
+            return dot(v, v);
+        }
+
+        // gets the importance of a node relative to a point on a surface
+        float nodeImportance(vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
+            float min_distance_sq = length(node.max - node.min);
+            vec3 centroid_bvhspace = (node.max + node.min) / 2.0;
+            vec3 centroid_worldspace = transform * vec4(centroid_bvhspace, 1.0);
+            float true_distance_sq =  lengthSquared(centroid_worldspace - point);
+            float distance_sq = max(true_distance_sq, min_distance_sq);
+            return node.luminance / distance_sq;
+        }
+
+        struct BvhTraverseResult {
+            bool success;
+            uint instance_index;
+            uint prim_index;
+            float probability;
+        };
+
+        BvhTraverseResult traverseBvh(vec3 point, vec3 normal, uint seed) {
+            // check that the top level bvh isn't a dummy node
+            if(bvh_nodes[0].luminance == 0.0) {
+                return BvhTraverseResult(
+                    false,
+                    0,
+                    0,
+                    0.0
+                );
+            }
+
+            // first traverse top level bvh
+            float probability = 1.0;
+            BvhNode node = bvh_nodes[0];
+            while(node.left_node_idx != 0xFFFFFFFF) {
+                // otherwise pick a child node
+                BvhNode left = bvh_nodes[node.left_node_idx];
+                BvhNode right = bvh_nodes[node.right_node_idx_or_prim_idx];
+                
+                float left_importance = nodeImportance(point, normal, mat4x3(1.0), left);
+                float right_importance = nodeImportance(point, normal, mat4x3(1.0), right);
+                float total_importance = left_importance + right_importance;
+                float left_importance_normalized = left_importance / total_importance;
+                float right_importance_normalized = right_importance / total_importance;
+                float choice = murmur3_finalizef(seed);
+                if (left_importance_normalized == 0.0 && right_importance_normalized == 0.0) {
+                    return BvhTraverseResult(
+                        false,
+                        0,
+                        0,
+                        0.0
+                    );
+                } else if(choice < left_importance_normalized) {
+                    node = left;
+                    probability *= left_importance_normalized;
+                } else {
+                    node = right;
+                    probability *= right_importance_normalized;
+                }
+                seed = murmur3_combine(seed, 0);
+            }
+
+            // now traverse bottom level bvh
+            uint instance_index = node.right_node_idx_or_prim_idx;
+            InstanceData id = instance_data[instance_index];
+            InstanceBvhNodeBuffer ibnb = InstanceBvhNodeBuffer(id.bvh_node_buffer_addr);
+
+            node = ibnb.bvh_nodes[0];
+            while(node.left_node_idx != 0xFFFFFFFF) {
+                // otherwise pick a child node
+                BvhNode left = ibnb.bvh_nodes[node.left_node_idx];
+                BvhNode right = ibnb.bvh_nodes[node.right_node_idx_or_prim_idx];
+                float left_importance = nodeImportance(point, normal, id.transform, left);
+                float right_importance = nodeImportance(point, normal, id.transform, right);
+                float total_importance = left_importance + right_importance;
+                float left_importance_normalized = left_importance / total_importance;
+                float right_importance_normalized = right_importance / total_importance;
+                float choice = murmur3_finalizef(seed);
+                if (left_importance_normalized == 0.0 && right_importance_normalized == 0.0) {
+                    return BvhTraverseResult(
+                        false,
+                        0,
+                        0,
+                        0.0
+                    );
+                } else if(choice < left_importance_normalized) {
+                    node = left;
+                    probability *= left_importance_normalized;
+                } else {
+                    node = right;
+                    probability *= right_importance_normalized;
+                }
+            }
+
+            // grab triangle index
+            uint prim_index = node.right_node_idx_or_prim_idx;
+
+            return BvhTraverseResult(
+                true,
+                instance_index,
+                prim_index,
+                probability
+            );
+        }
+
         // returns a vector sampled from the hemisphere with positive y
         // sample is weighted by cosine of angle between sample and y axis
         // https://cseweb.ucsd.edu/classes/sp17/cse168-a/CSE168_08_PathTracing.pdf
@@ -135,72 +241,6 @@ vulkano_shaders::shader! {
         vec3 triangleSample(vec2 uv, vec3 orig, vec3 v0, vec3 v1, vec3 v2) {
             vec3 bary = vec3(1.0 - uv.x - uv.y, uv.x, uv.y);
             return normalize(bary.x * (v0-orig) + bary.y * (v1-orig) + bary.z * (v2-orig));
-        }
-
-        // gets the importance of a node relative to a point on a surface
-        float nodeImportance(vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
-            float min_distance_sq = length(node.max - node.min);
-            vec3 centroid_bvhspace = (node.max + node.min) / 2.0;
-            vec3 centroid_worldspace = transform * vec4(centroid_bvhspace, 1.0);
-            float true_distance_sq =  dot(centroid_worldspace - point, centroid_worldspace - point);
-            float distance_sq = max(true_distance_sq, min_distance_sq);
-            return node.luminance / distance_sq;
-        }
-
-        BvhNode chooseBvhNode(vec3 point, vec3 normal, uint seed, mat4x3 transform, BvhNode left, BvhNode right) {
-            float left_importance = nodeImportance(point, normal, transform, left);
-            float right_importance = nodeImportance(point, normal, transform, right);
-            // shortcut if one of the nodes is zero
-            if(left_importance == 0.0) {
-                return right;
-            } else if(right_importance == 0.0) {
-                return left;
-            }
-            // otherwise do a weighted random choice
-            float total_importance = left_importance + right_importance;
-            float choice = murmur3_finalizef(seed);
-            if(choice < left_importance / total_importance) {
-                return left;
-            } else {
-                return right;
-            }
-        }
-
-        vec3 traverseBvh(vec3 point, vec3 normal, uint seed) {
-            // check that the top level bvh isn't a dummy node
-            if(bvh_nodes[0].luminance == 0.0) {
-                return vec3(0.0);
-            }
-
-            // first traverse top level bvh
-            BvhNode node = bvh_nodes[0];
-            while(node.left_node_idx != 0xFFFFFFFF) {
-                // otherwise pick a child node
-                BvhNode left = bvh_nodes[node.left_node_idx];
-                BvhNode right = bvh_nodes[node.right_node_idx_or_prim_idx];
-                node = chooseBvhNode(point, normal, seed, mat4x3(1.0), left, right);
-                seed = murmur3_combine(seed, 0);
-            }
-
-            // now traverse bottom level bvh
-            InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
-            InstanceBvhNodeBuffer ibnb = InstanceBvhNodeBuffer(id.bvh_node_buffer_addr);
-
-            node = ibnb.bvh_nodes[0];
-            while(node.left_node_idx != 0xFFFFFFFF) {
-                // otherwise pick a child node
-                BvhNode left = ibnb.bvh_nodes[node.left_node_idx];
-                BvhNode right = ibnb.bvh_nodes[node.right_node_idx_or_prim_idx];
-                node = chooseBvhNode(point, normal, seed, id.transform, left, right);
-                seed = murmur3_combine(seed, 0);
-            }
-
-            // grab triangle id
-            uint prim_id = node.right_node_idx_or_prim_idx;
-
-            vec3 color = normalize(vec3(murmur3_finalizef(prim_id), murmur3_finalizef(murmur3_combine(prim_id, 1)), murmur3_finalizef(murmur3_combine(prim_id, 2))));
-
-            return 0.01 * color * nodeImportance(point, normal, id.transform, node);
         }
 
         struct IntersectionCoordinateSystem {
@@ -459,7 +499,7 @@ vulkano_shaders::shader! {
                     sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
                 }
                 color += sample_color;
-                color += traverseBvh(first_intersection_info.position, first_intersection_info.hit_coords.normal, sample_seed);
+                // color += traverseBvh(first_intersection_info.position, first_intersection_info.hit_coords.normal, sample_seed);
             }
         
 
