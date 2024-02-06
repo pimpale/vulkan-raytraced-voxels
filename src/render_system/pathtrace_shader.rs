@@ -11,6 +11,7 @@ vulkano_shaders::shader! {
         #extension GL_EXT_nonuniform_qualifier: require
 
         #define M_PI 3.1415926535897932384626433832795
+        #define EPSILON_BLOCK 0.001
 
         layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
@@ -123,15 +124,137 @@ vulkano_shaders::shader! {
             return dot(v, v);
         }
 
+        vec3 aabbCorner(vec3 min, vec3 max, uint i) {
+            return vec3(
+                (i & 1) == 0 ? min.x : max.x,
+                (i & 2) == 0 ? min.y : max.y,
+                (i & 4) == 0 ? min.z : max.z
+            );
+        }
+
+        vec3 aabbCenter(vec3 min, vec3 max) {
+            return (min + max) / 2.0;
+        }
+
+        // returns true if any part of the aabb is visible from the point in the direction of the normal
+        bool aabbIsVisible(vec3 point, vec3 normal, mat4x3 transform, vec3 min, vec3 max) {
+            for (uint i = 0; i < 8; i++) {
+                vec3 corner_worldspace = transform * vec4(aabbCorner(min, max, i), 1.0);
+                vec3 to_corner = corner_worldspace - point;
+                if(dot(to_corner, normal) >= EPSILON_BLOCK) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // returns true if any part of the triangle is visible from the point in the direction of the normal
+        bool triangleIsVisible(vec3 point, vec3 normal, vec3[3] tri) {
+            for(uint i = 0; i < 3; i++) {
+                vec3 to_v = tri[i] - point;
+                if(dot(to_v, normal) >= EPSILON_BLOCK) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // returns true if the point is past the plane defined by the triangle
+        bool pointIsVisibleFromTriangle(vec3 point, vec3[3] tri) {
+            vec3 v0_1 = tri[1] - tri[0];
+            vec3 v0_2 = tri[2] - tri[0];
+            vec3 normal = cross(v0_1, v0_2);
+            return dot(point - tri[0], normal) >= 0.0;
+        }
+
         // gets the importance of a node relative to a point on a surface
         float nodeImportance(vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
-            float min_distance_sq = length(node.max - node.min);
-            vec3 centroid_bvhspace = (node.max + node.min) / 2.0;
-            vec3 centroid_worldspace = transform * vec4(centroid_bvhspace, 1.0);
-            float true_distance_sq =  lengthSquared(centroid_worldspace - point);
+            if(!aabbIsVisible(point, normal, transform, node.min, node.max)) {
+                return 0.0;
+            }
+            float min_distance_sq = lengthSquared(node.max - node.min);
+            vec3 centroid_worldspace = transform * vec4(aabbCenter(node.min, node.max), 1.0);
+            float true_distance_sq = lengthSquared(centroid_worldspace - point);
             float distance_sq = max(true_distance_sq, min_distance_sq);
             return node.luminance / distance_sq;
         }
+
+        vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
+            return vec3[3](
+                transform * vec4(tri[0], 1.0),
+                transform * vec4(tri[1], 1.0),
+                transform * vec4(tri[2], 1.0)
+            );
+        }
+
+        vec3 triangleCenter(vec3[3] tri) {
+            return (tri[0] + tri[1] + tri[2]) / 3.0;
+        }
+
+        float triangleRadiusSquared(vec3[3] tri) {
+            vec3 center = triangleCenter(tri);
+            return max(
+                max(
+                    lengthSquared(tri[0] - center),
+                    lengthSquared(tri[1] - center)
+                ),
+                lengthSquared(tri[2] - center)
+            );
+        }
+
+        struct IntersectionCoordinateSystem {
+            vec3 normal;
+            vec3 tangent;
+            vec3 bitangent;
+        };
+
+        IntersectionCoordinateSystem localCoordinateSystem(vec3[3] tri) {
+            vec3 v0_1 = tri[1] - tri[0];
+            vec3 v0_2 = tri[2] - tri[0];
+            vec3 normal = cross(v0_1, v0_2);
+            vec3 tangent = v0_1;
+            vec3 bitangent = cross(normal, tangent);
+            
+            return IntersectionCoordinateSystem(
+                normalize(normal),
+                normalize(tangent),
+                normalize(bitangent)
+            );
+        }
+
+
+        // gets the importance of a node relative to a point on a surface, specialized for leaf nodes
+        float blNodeImportance(vec3 point, vec3 normal, mat4x3 transform, BvhNode node, InstanceVertexBuffer ivb) {
+            if(node.left_node_idx != 0xFFFFFFFF) {
+                return nodeImportance(point, normal, transform, node);
+            } else {
+                // untransformed triangle
+                vec3[3] tri_r = vec3[3](
+                    ivb.vertexes[node.right_node_idx_or_prim_idx*3 + 0].position,
+                    ivb.vertexes[node.right_node_idx_or_prim_idx*3 + 1].position,
+                    ivb.vertexes[node.right_node_idx_or_prim_idx*3 + 2].position
+                );
+                // transformed triangle
+                vec3[3] tri = triangleTransform(transform, tri_r);
+
+                // check if the triangle is visible
+                if(!triangleIsVisible(point, normal, tri)) {
+                    return 0.0;
+                }
+
+                // check if the point is past the plane defined by the triangle
+                if(!pointIsVisibleFromTriangle(point, tri)) {
+                    return 0.0;
+                }
+
+                float min_distance_sq = triangleRadiusSquared(tri);
+                vec3 centroid_worldspace = triangleCenter(tri);
+                float true_distance_sq = lengthSquared(centroid_worldspace - point);
+                float distance_sq = max(true_distance_sq, min_distance_sq);
+                return node.luminance / distance_sq;            
+            }
+        }
+
 
         struct BvhTraverseResult {
             bool success;
@@ -164,15 +287,15 @@ vulkano_shaders::shader! {
                 float total_importance = left_importance + right_importance;
                 float left_importance_normalized = left_importance / total_importance;
                 float right_importance_normalized = right_importance / total_importance;
-                float choice = murmur3_finalizef(seed);
-                if (left_importance_normalized == 0.0 && right_importance_normalized == 0.0) {
+                
+                if (total_importance == 0.0) {
                     return BvhTraverseResult(
                         false,
                         0,
                         0,
                         0.0
                     );
-                } else if(choice < left_importance_normalized) {
+                } else if(murmur3_finalizef(seed) < left_importance_normalized) {
                     node = left;
                     probability *= left_importance_normalized;
                 } else {
@@ -186,32 +309,35 @@ vulkano_shaders::shader! {
             uint instance_index = node.right_node_idx_or_prim_idx;
             InstanceData id = instance_data[instance_index];
             InstanceBvhNodeBuffer ibnb = InstanceBvhNodeBuffer(id.bvh_node_buffer_addr);
+            InstanceVertexBuffer ivb = InstanceVertexBuffer(id.vertex_buffer_addr);
 
             node = ibnb.bvh_nodes[0];
             while(node.left_node_idx != 0xFFFFFFFF) {
                 // otherwise pick a child node
                 BvhNode left = ibnb.bvh_nodes[node.left_node_idx];
                 BvhNode right = ibnb.bvh_nodes[node.right_node_idx_or_prim_idx];
-                float left_importance = nodeImportance(point, normal, id.transform, left);
-                float right_importance = nodeImportance(point, normal, id.transform, right);
+
+                float left_importance = blNodeImportance(point, normal, id.transform, left, ivb);
+                float right_importance = blNodeImportance(point, normal, id.transform, right, ivb);
                 float total_importance = left_importance + right_importance;
                 float left_importance_normalized = left_importance / total_importance;
                 float right_importance_normalized = right_importance / total_importance;
-                float choice = murmur3_finalizef(seed);
-                if (left_importance_normalized == 0.0 && right_importance_normalized == 0.0) {
+                
+                if (total_importance == 0.0) {
                     return BvhTraverseResult(
                         false,
                         0,
                         0,
                         0.0
                     );
-                } else if(choice < left_importance_normalized) {
+                } else if(murmur3_finalizef(seed) < left_importance_normalized) {
                     node = left;
                     probability *= left_importance_normalized;
                 } else {
                     node = right;
                     probability *= right_importance_normalized;
                 }
+                seed = murmur3_combine(seed, 0);
             }
 
             // grab triangle index
@@ -223,6 +349,25 @@ vulkano_shaders::shader! {
                 prim_index,
                 probability
             );
+        }
+
+
+        vec3 debugPrim(uint instance_index, uint prim_index) {
+            uint colseed = murmur3_combine(instance_index, prim_index);
+            return normalize(vec3(
+                murmur3_finalizef(murmur3_combine(colseed, 0)),
+                murmur3_finalizef(murmur3_combine(colseed, 1)),
+                murmur3_finalizef(murmur3_combine(colseed, 2))
+            ));
+        }
+
+        vec3 debugBvh(vec3 point, vec3 normal, uint seed) {
+            BvhTraverseResult result = traverseBvh(point, normal, seed);
+            if(result.success) {
+                return debugPrim(result.instance_index, result.prim_index);
+            } else {
+                return vec3(-1.0, -1.0, -1.0);
+            }
         }
 
         // returns a vector sampled from the hemisphere with positive y
@@ -243,12 +388,6 @@ vulkano_shaders::shader! {
             return normalize(bary.x * (v0-orig) + bary.y * (v1-orig) + bary.z * (v2-orig));
         }
 
-        struct IntersectionCoordinateSystem {
-            vec3 normal;
-            vec3 tangent;
-            vec3 bitangent;
-        };
-
 
         // returns a vector sampled from the hemisphere defined around the coordinate system defined by normal, tangent, and bitangent
         // normal, tangent and bitangent form a right handed coordinate system 
@@ -258,15 +397,14 @@ vulkano_shaders::shader! {
         }
 
         struct IntersectionInfo {
-            IntersectionCoordinateSystem hit_coords;
-            vec3 position;
-            vec2 uv;
-            uint t;
             bool miss;
+            uint instance_index;
+            uint prim_index;
+            vec2 bary;
         };
 
         IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
-            const float t_min = 0.01;
+            const float t_min = EPSILON_BLOCK;
             const float t_max = 1000.0;
             rayQueryEXT ray_query;
             rayQueryInitializeEXT(
@@ -286,69 +424,26 @@ vulkano_shaders::shader! {
             // if miss return miss
             if(rayQueryGetIntersectionTypeEXT(ray_query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
                 return IntersectionInfo(
-                    IntersectionCoordinateSystem(
-                        vec3(0.0),
-                        vec3(0.0),
-                        vec3(0.0)
-                    ),
-                    vec3(0.0),
-                    vec2(0.0),
+                    true,
                     0,
-                    true
+                    0,
+                    vec2(0.0)
+                );
+            } else {
+                return IntersectionInfo(
+                    false,
+                    rayQueryGetIntersectionInstanceIdEXT(ray_query, true),
+                    rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true),
+                    rayQueryGetIntersectionBarycentricsEXT(ray_query, true)
                 );
             }
-            
-            uint prim_index = rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true);
-            uint instance_index = rayQueryGetIntersectionInstanceIdEXT(ray_query, true);
-
-            // get barycentric coordinates
-            vec2 bary = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
-            vec3 bary3 = vec3(1.0 - bary.x - bary.y,  bary.x, bary.y);
-
-            // get the instance data for this instance
-            InstanceData id = instance_data[instance_index];
-
-            InstanceVertexBuffer ivb = InstanceVertexBuffer(id.vertex_buffer_addr);
-            Vertex v0 = ivb.vertexes[prim_index*3 + 0];
-            Vertex v1 = ivb.vertexes[prim_index*3 + 1];
-            Vertex v2 = ivb.vertexes[prim_index*3 + 2];
-
-            // get the transformed positions
-            vec3 v0_p = id.transform * vec4(v0.position, 1.0);
-            vec3 v1_p = id.transform * vec4(v1.position, 1.0);
-            vec3 v2_p = id.transform * vec4(v2.position, 1.0);
-
-            // get the texture coordinates
-            uint t = v0.t;
-            vec2 uv = v0.uv * bary3.x + v1.uv * bary3.y + v2.uv * bary3.z;
-                
-            // get normal 
-            vec3 v0_1 = v1_p - v0_p;
-            vec3 v0_2 = v2_p - v0_p;
-            vec3 normal = cross(v0_1, v0_2);
-            vec3 tangent = v0_1;
-            vec3 bitangent = cross(normal, tangent);
-
-            // get position
-            vec3 position = v0_p * bary3.x + v1_p * bary3.y + v2_p * bary3.z;
-
-            return IntersectionInfo(
-                IntersectionCoordinateSystem(
-                    normalize(normal),
-                    normalize(tangent),
-                    normalize(bitangent)
-                ),
-                position,
-                uv,
-                t,
-                false
-            );
         }
 
         struct BounceInfo {
             vec3 emissivity;
             vec3 reflectivity;
             bool miss;
+            IntersectionCoordinateSystem ics;
             vec3 new_origin;
             vec3 new_direction;
             float scatter_pdf_over_ray_pdf;
@@ -363,19 +458,53 @@ vulkano_shaders::shader! {
                     sky_reflectivity,
                     // miss, so the ray is done
                     true,
+                    IntersectionCoordinateSystem(
+                        vec3(0.0),
+                        vec3(0.0),
+                        vec3(0.0)
+                    ),
                     vec3(0.0),
                     vec3(0.0),
                     1.0
                 );
             }
 
-            vec3 new_origin = info.position;
+
+            // get barycentric coordinates
+            vec3 bary3 = vec3(1.0 - info.bary.x - info.bary.y,  info.bary.x, info.bary.y);
+
+            // get the instance data for this instance
+            InstanceData id = instance_data[info.instance_index];
+
+            InstanceVertexBuffer ivb = InstanceVertexBuffer(id.vertex_buffer_addr);
+            Vertex v0 = ivb.vertexes[info.prim_index*3 + 0];
+            Vertex v1 = ivb.vertexes[info.prim_index*3 + 1];
+            Vertex v2 = ivb.vertexes[info.prim_index*3 + 2];
+
+            // triangle untransformed
+            vec3[3] tri_r = vec3[3](
+                v0.position,
+                v1.position,
+                v2.position
+            );
+
+            // transform triangle
+            vec3[3] tri = triangleTransform(id.transform, tri_r);
+
+            IntersectionCoordinateSystem ics = localCoordinateSystem(tri);
+
+            // get the texture coordinates
+            uint t = v0.t;
+            vec2 uv = v0.uv * bary3.x + v1.uv * bary3.y + v2.uv * bary3.z;
+
+
+            vec3 new_origin = tri[0] * bary3.x + tri[1] * bary3.y + tri[2] * bary3.z;
             vec3 new_direction;
 
             // fetch data
-            vec4 tex0 = texture(nonuniformEXT(sampler2D(tex[info.t*3+0], s)), info.uv).rgba;
-            vec4 tex1 = texture(nonuniformEXT(sampler2D(tex[info.t*3+1], s)), info.uv).rgba;
-            vec4 tex2 = texture(nonuniformEXT(sampler2D(tex[info.t*3+2], s)), info.uv).rgba;
+            vec4 tex0 = texture(nonuniformEXT(sampler2D(tex[t*3+0], s)), uv).rgba;
+            vec4 tex1 = texture(nonuniformEXT(sampler2D(tex[t*3+1], s)), uv).rgba;
+            vec4 tex2 = texture(nonuniformEXT(sampler2D(tex[t*3+2], s)), uv).rgba;
 
             float scatter_pdf_over_ray_pdf;
 
@@ -384,16 +513,20 @@ vulkano_shaders::shader! {
             vec3 emissivity = 0.0*tex1.rgb;
             float metallicity = tex2.r;
 
+            if(tex1.r > 0.0) {
+                emissivity = debugPrim(info.instance_index, info.prim_index);
+                reflectivity = vec3(0.0);
+            }
+
             // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
             float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
-
             if(scatter_kind_rand < metallicity) {
                 // mirror scattering
                 scatter_pdf_over_ray_pdf = 1.0;
 
                 new_direction = reflect(
                     direction,
-                    info.hit_coords.normal
+                    ics.normal
                 );
             } else if (scatter_kind_rand < metallicity + (1.0-alpha)) {
                 // transmissive scattering
@@ -413,7 +546,7 @@ vulkano_shaders::shader! {
                         murmur3_finalizef(murmur3_combine(seed, 2))
                     ),
                     // align it with the normal of the object we hit
-                    info.hit_coords
+                    ics
                 );
 
                 // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
@@ -426,6 +559,7 @@ vulkano_shaders::shader! {
                 emissivity,
                 reflectivity,
                 false,
+                ics,
                 new_origin,
                 new_direction,
                 scatter_pdf_over_ray_pdf
@@ -476,6 +610,8 @@ vulkano_shaders::shader! {
                 vec3 origin = bounce_info.new_origin;
                 vec3 direction = bounce_info.new_direction;
 
+                vec3 debug_color = 0.5 * debugBvh(bounce_info.new_origin, bounce_info.ics.normal, sample_seed);
+
                 uint current_bounce;
                 for (current_bounce = 1; current_bounce < MAX_BOUNCES; current_bounce++) {
                     IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
@@ -498,13 +634,13 @@ vulkano_shaders::shader! {
                 for(int i = int(current_bounce)-1; i >= 0; i--) {
                     sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
                 }
+                color += debug_color;
                 color += sample_color;
-                // color += traverseBvh(first_intersection_info.position, first_intersection_info.hit_coords.normal, sample_seed);
             }
         
 
             // average the samples
-            vec3 pixel_color = (1.5*color) / float(SAMPLES_PER_PIXEL);
+            vec3 pixel_color = (1.0*color) / float(SAMPLES_PER_PIXEL);
             out_color[gl_GlobalInvocationID.y*camera.screen_size.x + gl_GlobalInvocationID.x] = u8vec4(pixel_color.zyx*255, 255);
         }
     ",
