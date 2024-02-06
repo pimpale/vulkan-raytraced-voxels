@@ -94,6 +94,7 @@ pub fn generate_chunk(data: &WorldgenData, chunk_position: Point3<i32>) -> Vec<B
             }
         }
     }
+    blocks[0] = 2;
     blocks
 }
 

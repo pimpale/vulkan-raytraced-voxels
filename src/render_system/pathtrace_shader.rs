@@ -570,7 +570,7 @@ vulkano_shaders::shader! {
             return 2*vec2(screen)/vec2(screen_size) - 1.0;
         }
 
-        // const uint SAMPLES_PER_PIXEL = 1;
+        const uint SAMPLES_PER_PIXEL = 8;
         const uint MAX_BOUNCES = 2;
 
         void main() {
@@ -582,7 +582,7 @@ vulkano_shaders::shader! {
             pixel_seed = murmur3_combine(pixel_seed, gl_GlobalInvocationID.x);
             pixel_seed = murmur3_combine(pixel_seed, gl_GlobalInvocationID.y);
 
-            uint SAMPLES_PER_PIXEL = camera.samples;
+            // uint SAMPLES_PER_PIXEL = camera.samples;
 
 
             vec3 bounce_emissivity[MAX_BOUNCES];
@@ -610,8 +610,11 @@ vulkano_shaders::shader! {
                 vec3 origin = bounce_info.new_origin;
                 vec3 direction = bounce_info.new_direction;
 
-                vec3 debug_color = 0.5 * debugBvh(bounce_info.new_origin, bounce_info.ics.normal, sample_seed);
-
+                vec3 debug_color = vec3(0.0);
+                // if (sample_id > 1000)
+                 {
+                    debug_color = 0.5 * debugBvh(bounce_info.new_origin, bounce_info.ics.normal, sample_seed);
+                }
                 uint current_bounce;
                 for (current_bounce = 1; current_bounce < MAX_BOUNCES; current_bounce++) {
                     IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
