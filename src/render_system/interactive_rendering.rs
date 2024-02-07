@@ -1,7 +1,7 @@
 use core::panic;
 use std::sync::Arc;
 
-use image::RgbaImage;
+use image::{buffer, RgbaImage};
 use nalgebra::{Point3, Vector2, Vector3};
 use vulkano::{
     acceleration_structure::AccelerationStructure,
@@ -494,7 +494,6 @@ impl Renderer {
                     up,
                     screen_size: [extent[0], extent[1]].into(),
                     frame: self.frame_count,
-                    samples,
                 },
             )
             .unwrap()

@@ -8,9 +8,11 @@ pub mod aabb;
 #[repr(C)]
 pub struct BvhNode {
     // the min bound
-    pub min: [f32; 3],
+    pub min_or_v0: [f32; 3],
     // the max bound
-    pub max: [f32; 3],
+    pub max_or_v1: [f32; 3],
+    // v2
+    pub v2: [f32; 3],
     // how much power is in this light node
     pub luminance: f32,
     // if this is 0xFFFFFFFF, then this is a leaf node
@@ -26,8 +28,9 @@ pub struct BvhNode {
 impl BvhNode {
     pub fn dummy() -> BvhNode {
         BvhNode {
-            min: [0.0; 3],
-            max: [0.0; 3],
+            min_or_v0: [0.0; 3],
+            max_or_v1: [0.0; 3],
+            v2: [0.0; 3],
             luminance: 0.0,
             left_node_idx: 0xFFFFFFFF,
             right_node_idx_or_prim_idx: 0xFFFFFFFF,

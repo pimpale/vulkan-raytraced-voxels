@@ -269,7 +269,7 @@ where
             let light_tl_bvh = if centroids.len() == 0 {
                 vec![BvhNode::dummy()]
             } else {
-                bvh::build::build_bvh(&centroids, &aabbs, &luminances, &instance_ids)
+                bvh::build::build_bvh(&centroids, &aabbs, &luminances, None, &instance_ids)
             };
 
             let light_tl_bvh_buffer = Buffer::from_iter(
@@ -397,6 +397,7 @@ impl SceneUploader {
         let mut prim_aabbs = vec![];
         let mut prim_luminances = vec![];
         let mut prim_index_ids = vec![];
+        let mut prim_vertexes = vec![];
 
         for i in 0..(vertexes.len() / 3) {
             let luminance = self.texture_luminances[vertexes[i * 3 + 0].t as usize];
@@ -405,6 +406,7 @@ impl SceneUploader {
                 let b = Point3::from(vertexes[i * 3 + 1].position);
                 let c = Point3::from(vertexes[i * 3 + 2].position);
                 let area = (b - a).cross(&(c - a)).norm() / 2.0;
+                prim_vertexes.extend_from_slice(&[a, b, c]);
                 prim_centroids.push(Point3::from((a.coords + b.coords + c.coords) / 3.0));
                 prim_aabbs.push(Aabb::from_points(&[a, b, c]));
                 prim_luminances.push(luminance * area);
@@ -432,11 +434,14 @@ impl SceneUploader {
                 &prim_centroids,
                 &prim_aabbs,
                 &prim_luminances,
+                Some(&prim_vertexes),
                 &prim_index_ids,
             );
 
-            let light_aabb =
-                Aabb::from_points(&[light_bl_bvh[0].min.into(), light_bl_bvh[0].max.into()]);
+            let light_aabb = Aabb::from_points(&[
+                light_bl_bvh[0].min_or_v0.into(),
+                light_bl_bvh[0].max_or_v1.into(),
+            ]);
             let luminance = light_bl_bvh[0].luminance;
 
             let light_bl_bvh_buffer = Buffer::from_iter(
@@ -453,8 +458,6 @@ impl SceneUploader {
                 light_bl_bvh,
             )
             .unwrap();
-
-
 
             SceneUploadedObjectHandle::Uploaded {
                 vertex_buffer,
