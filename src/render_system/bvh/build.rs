@@ -67,7 +67,7 @@ impl Primitive for BlBvh {
     }
 
     fn luminance(&self) -> f32 {
-        self.nodes[0].luminance
+        self.nodes[0].lum_f345
     }
 }
 
@@ -357,8 +357,8 @@ pub fn build_bvh(
                     BvhNode {
                         min_or_v0: vertexes[prim_idx * 3 + 0].into(),
                         max_or_v1: vertexes[prim_idx * 3 + 1].into(),
-                        v2: vertexes[prim_idx * 3 + 2].into(), 
-                        luminance: prim_luminances[prim_idx],
+                        lum_f123_or_v2: vertexes[prim_idx * 3 + 2].into(), 
+                        lum_f345: prim_luminances[prim_idx],
                         left_node_idx: u32::MAX,
                         right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
                     }
@@ -366,8 +366,8 @@ pub fn build_bvh(
                 BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
                     min_or_v0: node.aabb.min().coords.into(),
                     max_or_v1: node.aabb.max().coords.into(),
-                    v2: [0.0; 3],
-                    luminance: 0.0,
+                    lum_f123_or_v2: [0.0; 3],
+                    lum_f345: 0.0,
                     left_node_idx: internal_node.left_child_idx as u32,
                     right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
                 },
@@ -382,8 +382,8 @@ pub fn build_bvh(
                     BvhNode {
                         min_or_v0: prim_aabbs[prim_idx].min().coords.into(),
                         max_or_v1: prim_aabbs[prim_idx].max().coords.into(),
-                        v2: [0.0; 3],
-                        luminance: prim_luminances[prim_idx],
+                        lum_f123_or_v2: [0.0; 3],
+                        lum_f345: prim_luminances[prim_idx],
                         left_node_idx: u32::MAX,
                         right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
                     }
@@ -391,8 +391,8 @@ pub fn build_bvh(
                 BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
                     min_or_v0: node.aabb.min().coords.into(),
                     max_or_v1: node.aabb.max().coords.into(),
-                    v2: [0.0; 3],
-                    luminance: 0.0,
+                    lum_f123_or_v2: [0.0; 3],
+                    lum_f345: 0.0,
                     left_node_idx: internal_node.left_child_idx as u32,
                     right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
                 },
@@ -410,7 +410,7 @@ pub fn build_bvh(
             // internal node
             let left_child = &opt_bvh[opt_bvh[i].left_node_idx as usize];
             let right_child = &opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize];
-            opt_bvh[i].luminance = left_child.luminance + right_child.luminance;
+            opt_bvh[i].lum_f345 = left_child.lum_f345 + right_child.lum_f345;
         }
     }
 

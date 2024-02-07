@@ -442,7 +442,7 @@ impl SceneUploader {
                 light_bl_bvh[0].min_or_v0.into(),
                 light_bl_bvh[0].max_or_v1.into(),
             ]);
-            let luminance = light_bl_bvh[0].luminance;
+            let luminance = light_bl_bvh[0].lum_f345;
 
             let light_bl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),

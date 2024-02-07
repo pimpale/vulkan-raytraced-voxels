@@ -12,9 +12,9 @@ pub struct BvhNode {
     // the max bound
     pub max_or_v1: [f32; 3],
     // v2
-    pub v2: [f32; 3],
+    pub lum_f123_or_v2: [f32; 3],
     // how much power is in this light node
-    pub luminance: f32,
+    pub lum_f345: f32,
     // if this is 0xFFFFFFFF, then this is a leaf node
     pub left_node_idx: u32,
     // if left_node_idx is 0xFFFFFFFF, right_node_idx_or_prim_idx is an `Index`
@@ -30,8 +30,8 @@ impl BvhNode {
         BvhNode {
             min_or_v0: [0.0; 3],
             max_or_v1: [0.0; 3],
-            v2: [0.0; 3],
-            luminance: 0.0,
+            lum_f123_or_v2: [0.0; 3],
+            lum_f345: 0.0,
             left_node_idx: 0xFFFFFFFF,
             right_node_idx_or_prim_idx: 0xFFFFFFFF,
         }
