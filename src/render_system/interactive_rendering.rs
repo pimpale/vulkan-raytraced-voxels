@@ -464,7 +464,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_data),
-                WriteDescriptorSet::buffer(2, luminance_bvh),
+                // WriteDescriptorSet::buffer(2, luminance_bvh),
                 WriteDescriptorSet::buffer(3, self.render_dests[image_index as usize].clone()),
             ],
             [],
@@ -487,13 +487,16 @@ impl Renderer {
             .push_constants(
                 self.pipeline.layout().clone(),
                 0,
-                pathtrace_shader::Camera {
-                    eye: eye.coords,
-                    front,
-                    right,
-                    up,
-                    screen_size: [extent[0], extent[1]].into(),
+                pathtrace_shader::PushConstants {
+                    camera: pathtrace_shader::Camera {
+                        eye: eye.coords,
+                        front,
+                        right,
+                        up,
+                        screen_size: [extent[0], extent[1]].into(),
+                    },
                     frame: self.frame_count,
+                    tl_bvh_addr: luminance_bvh.device_address().unwrap().get(),
                 },
             )
             .unwrap()

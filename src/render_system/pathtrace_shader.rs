@@ -19,28 +19,24 @@ vulkano_shaders::shader! {
         layout(set = 0, binding = 1) uniform texture2D tex[];
 
         layout(set = 1, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
-        
-        struct Vertex {
+
+        layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer Vertex {
             vec3 position;
             uint t;
             vec2 uv;
         };
 
-        layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer InstanceVertexBuffer {
-            Vertex vertexes[];
-        };
-
-        struct BvhNode {
-            vec3 min_or_v0;
-            vec3 max_or_v1;
-            vec3 v2;
-            float luminance;
+        layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer BvhNode {
             uint left_node_idx;
             uint right_node_idx_or_prim_idx;
-        };
-
-        layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer BvhNodeBuffer {
-            BvhNode bvh_nodes[];
+            vec3 min_or_v0;
+            vec3 max_or_v1;
+            float left_luminance_or_v2_1;
+            float right_luminance_or_v2_2;
+            float down_luminance_or_v2_3;
+            float up_luminance_or_prim_luminance;
+            float back_luminance;
+            float front_luminance;
         };
 
         struct InstanceData {
@@ -56,22 +52,23 @@ vulkano_shaders::shader! {
             InstanceData instance_data[];
         };
 
-        layout(set = 1, binding = 2, scalar) readonly buffer TlBvhNodeBuffer {
-            BvhNode bvh_nodes[];
-        };
-
         layout(set = 1, binding = 3, scalar) writeonly buffer Outputs {
             u8vec4 out_color[];
         };
 
-        layout(push_constant, scalar) uniform Camera {
+        struct Camera {
             vec3 eye;
             vec3 front;
             vec3 up;
             vec3 right;
             uvec2 screen_size;
+        };
+
+        layout(push_constant, scalar) uniform PushConstants {
+            Camera camera;
             uint frame;
-        } camera;
+            uint64_t tl_bvh_addr;
+        } push_constants;
 
 
         // source: https://stackoverflow.com/questions/4200224/random-noise-functions-for-glsl
@@ -122,30 +119,6 @@ vulkano_shaders::shader! {
 
         float lengthSquared(vec3 v) {
             return dot(v, v);
-        }
-
-        vec3 aabbCorner(vec3 min, vec3 max, uint i) {
-            return vec3(
-                (i & 1) == 0 ? min.x : max.x,
-                (i & 2) == 0 ? min.y : max.y,
-                (i & 4) == 0 ? min.z : max.z
-            );
-        }
-
-        vec3 aabbCenter(vec3 min, vec3 max) {
-            return (min + max) / 2.0;
-        }
-
-        // returns true if any part of the aabb is visible from the point in the direction of the normal
-        bool aabbIsVisible(vec3 point, vec3 normal, mat4x3 transform, vec3 min, vec3 max) {
-            for (uint i = 0; i < 8; i++) {
-                vec3 corner_worldspace = transform * vec4(aabbCorner(min, max, i), 1.0);
-                vec3 to_corner = corner_worldspace - point;
-                if(dot(to_corner, normal) >= EPSILON_BLOCK) {
-                    return true;
-                }
-            }
-            return false;
         }
 
         // returns true if any part of the triangle is visible from the point in the direction of the normal
@@ -210,24 +183,91 @@ vulkano_shaders::shader! {
             );
         }
 
+        // returns true if any part of the rect is visible from the point in the direction of the normal
+        bool rectIsVisible(vec3 point, vec3 normal, vec3[4] rect) {
+            for(uint i = 0; i < 4; i++) {
+                vec3 to_v = rect[i] - point;
+                if(dot(to_v, normal) >= EPSILON_BLOCK) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // returns true if the point is past the plane defined by the triangle
+        bool pointIsVisibleFromPlane(vec3 point, vec3 plane_point, vec3 plane_normal) {
+            return dot(point - plane_point, plane_normal) >= 0.0;
+        }
 
         // gets the importance of a node relative to a point on a surface, specialized for leaf nodes
         float nodeImportance(bool topLevel, vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
-            if(topLevel || node.left_node_idx != 0xFFFFFFFF) {
-                if(!aabbIsVisible(point, normal, transform, node.min_or_v0, node.max_or_v1)) {
-                    return 0.0;
-                }
-                float min_distance_sq = lengthSquared(node.max_or_v1 - node.min_or_v0);
-                vec3 centroid_worldspace = transform * vec4(aabbCenter(node.min_or_v0, node.max_or_v1), 1.0);
-                float true_distance_sq = lengthSquared(centroid_worldspace - point);
-                float distance_sq = max(true_distance_sq, min_distance_sq);
-                return node.luminance / distance_sq;
+            // replace node with lower level node to get better bounds
+            if(topLevel && node.left_node_idx == 0xFFFFFFFF) {
+                InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
+                transform = id.transform;
+                topLevel = false;
+                node = BvhNode(id.bvh_node_buffer_addr);
+            }
+            
+            if(topLevel || node.left_node_idx != 0xFFFFFFFF) {                
+                // get corners
+                vec3 v000 = transform * vec4(node.min_or_v0, 1.0);
+                vec3 v111 = transform * vec4(node.max_or_v1, 1.0);
+                vec3 v001 = vec3(v000.x, v000.y, v111.z);
+                vec3 v010 = vec3(v000.x, v111.y, v000.z);
+                vec3 v011 = vec3(v000.x, v111.y, v111.z);
+                vec3 v100 = vec3(v111.x, v000.y, v000.z);
+                vec3 v101 = vec3(v111.x, v000.y, v111.z);
+                vec3 v110 = vec3(v111.x, v111.y, v000.z);
+
+                float distance_sq = max(
+                    lengthSquared(v111 - v000),
+                    lengthSquared(0.5*(v000 + v111) - point)
+                );
+
+                float luminance = 0.0;
+                
+                luminance +=
+                    node.left_luminance_or_v2_1 
+                    * float(rectIsVisible(point, normal, vec3[4](v100, v101, v111, v110)))
+                    * float(pointIsVisibleFromPlane(point, v100, v000 - v100));
+
+                luminance +=
+                    node.right_luminance_or_v2_2 
+                    * float(rectIsVisible(point, normal, vec3[4](v000, v001, v011, v010)))
+                    * float(pointIsVisibleFromPlane(point, v000, v100 - v000));                
+                
+                luminance +=
+                    node.down_luminance_or_v2_3 
+                    * float(rectIsVisible(point, normal, vec3[4](v010, v011, v111, v110)))
+                    * float(pointIsVisibleFromPlane(point, v010, v000 - v010));
+                
+                luminance +=
+                    node.up_luminance_or_prim_luminance
+                    * float(rectIsVisible(point, normal, vec3[4](v000, v001, v101, v100)))
+                    * float(pointIsVisibleFromPlane(point, v000, v010 - v000));
+
+                luminance +=
+                    node.back_luminance
+                    * float(rectIsVisible(point, normal, vec3[4](v001, v011, v111, v101)))
+                    * float(pointIsVisibleFromPlane(point, v001, v000 - v001));
+
+                luminance +=
+                    node.front_luminance
+                    * float(rectIsVisible(point, normal, vec3[4](v000, v010, v110, v100)))
+                    * float(pointIsVisibleFromPlane(point, v000, v001 - v000));
+
+                return luminance / distance_sq;
             } else {
                 // untransformed triangle
                 vec3[3] tri_r = vec3[3](
                     node.min_or_v0,
                     node.max_or_v1,
-                    node.v2
+                    vec3(
+                        node.left_luminance_or_v2_1,
+                        node.right_luminance_or_v2_2,
+                        node.down_luminance_or_v2_3
+                    )
                 );
                 // transformed triangle
                 vec3[3] tri = triangleTransform(transform, tri_r);
@@ -246,7 +286,7 @@ vulkano_shaders::shader! {
                 vec3 centroid_worldspace = triangleCenter(tri);
                 float true_distance_sq = lengthSquared(centroid_worldspace - point);
                 float distance_sq = max(true_distance_sq, min_distance_sq);
-                return node.luminance / distance_sq;
+                return node.up_luminance_or_prim_luminance / distance_sq;
             }
         }
 
@@ -255,56 +295,53 @@ vulkano_shaders::shader! {
             uint instance_index;
             uint prim_index;
             float probability;
+            float importance;
         };
 
         BvhTraverseResult traverseBvh(vec3 point, vec3 normal, uint seed) {
-            BvhNode node = bvh_nodes[0];
+            BvhNode root = BvhNode(push_constants.tl_bvh_addr);
+            BvhNode node = root;
 
             // check that the top level bvh isn't a dummy node
-            if(node.luminance == 0.0) {
+            if(node.left_node_idx == 0xFFFFFFFF && node.right_node_idx_or_prim_idx == 0xFFFFFFFF) {
                 return BvhTraverseResult(
                     false,
                     0,
                     0,
+                    0.0,
                     0.0
                 );
             }
 
             float probability = 1.0;
+            float importance = 0.0;
             mat4x3 transform = mat4x3(1.0);
             uint instance_index = 0xFFFFFFFF;
             bool topLevel = true;
-            BvhNodeBuffer bnb;
             while(true) {
                 if(node.left_node_idx == 0xFFFFFFFF) {
                     if(topLevel) {
                         instance_index = node.right_node_idx_or_prim_idx;
                         InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
                         transform = id.transform;
-                        bnb = BvhNodeBuffer(id.bvh_node_buffer_addr);
                         topLevel = false;
-                        node = bnb.bvh_nodes[0];
+                        root = BvhNode(id.bvh_node_buffer_addr);
+                        node = root;
                     } else {
                         return BvhTraverseResult(
                             true,
                             instance_index,
                             node.right_node_idx_or_prim_idx,
-                            probability
+                            probability,
+                            importance
                         );
                     }
                 }
             
                 // otherwise pick a child node
-                BvhNode left;
-                BvhNode right;
-                if(topLevel) {
-                    left = bvh_nodes[node.left_node_idx];
-                    right = bvh_nodes[node.right_node_idx_or_prim_idx];
-                } else {
-                    left = bnb.bvh_nodes[node.left_node_idx];
-                    right = bnb.bvh_nodes[node.right_node_idx_or_prim_idx];
-                }
-                
+                BvhNode left = root[node.left_node_idx];
+                BvhNode right = root[node.right_node_idx_or_prim_idx];
+
                 float left_importance = nodeImportance(topLevel, point, normal, transform, left);
                 float right_importance = nodeImportance(topLevel, point, normal, transform, right);
                 float total_importance = left_importance + right_importance;
@@ -316,14 +353,17 @@ vulkano_shaders::shader! {
                         false,
                         0,
                         0,
+                        0.0,
                         0.0
                     );
                 } else if(murmur3_finalizef(seed) < left_importance_normalized) {
                     node = left;
                     probability *= left_importance_normalized;
+                    importance = left_importance;
                 } else {
                     node = right;
                     probability *= right_importance_normalized;
+                    importance = right_importance;
                 }
                 seed = murmur3_combine(seed, 0);
             }
@@ -342,7 +382,7 @@ vulkano_shaders::shader! {
         vec3 debugBvh(vec3 point, vec3 normal, uint seed) {
             BvhTraverseResult result = traverseBvh(point, normal, seed);
             if(result.success) {
-                return debugPrim(result.instance_index, result.prim_index);
+                return 0.1*result.importance*debugPrim(result.instance_index, result.prim_index);
             } else {
                 return vec3(-1.0, -1.0, -1.0);
             }
@@ -454,10 +494,9 @@ vulkano_shaders::shader! {
             // get the instance data for this instance
             InstanceData id = instance_data[info.instance_index];
 
-            InstanceVertexBuffer ivb = InstanceVertexBuffer(id.vertex_buffer_addr);
-            Vertex v0 = ivb.vertexes[info.prim_index*3 + 0];
-            Vertex v1 = ivb.vertexes[info.prim_index*3 + 1];
-            Vertex v2 = ivb.vertexes[info.prim_index*3 + 2];
+            Vertex v0 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 0];
+            Vertex v1 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 1];
+            Vertex v2 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 2];
 
             // triangle untransformed
             vec3[3] tri_r = vec3[3](
@@ -548,16 +587,17 @@ vulkano_shaders::shader! {
             return 2*vec2(screen)/vec2(screen_size) - 1.0;
         }
 
-        const uint SAMPLES_PER_PIXEL = 1;
+        const uint SAMPLES_PER_PIXEL = 4;
         const uint MAX_BOUNCES = 5;
 
         void main() {
+            Camera camera = push_constants.camera;
             if(gl_GlobalInvocationID.x >= camera.screen_size.x || gl_GlobalInvocationID.y >= camera.screen_size.y) {
                 return;
             }
 
             uint pixel_seed = murmur3_combine(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
-            pixel_seed = murmur3_combine(pixel_seed, camera.frame);
+            pixel_seed = murmur3_combine(pixel_seed, push_constants.frame);
 
             vec3 bounce_emissivity[MAX_BOUNCES];
             vec3 bounce_reflectivity[MAX_BOUNCES];
@@ -587,6 +627,7 @@ vulkano_shaders::shader! {
                     bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                     bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
 
+                    if (current_bounce == 0)
                         debug_color += 0.5 * debugBvh(bounce_info.new_origin, bounce_info.ics.normal, sample_seed);
 
                     if(bounce_info.miss) {

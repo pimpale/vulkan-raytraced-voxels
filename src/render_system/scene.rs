@@ -275,7 +275,7 @@ where
             let light_tl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER,
+                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
