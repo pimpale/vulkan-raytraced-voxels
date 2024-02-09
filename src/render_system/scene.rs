@@ -38,7 +38,7 @@ struct Object {
     isometry: Isometry3<f32>,
     vertex_buffer: Subbuffer<[Vertex3D]>,
     blas: Arc<AccelerationStructure>,
-    luminance: f32,
+    luminance: [f32; 6],
     light_aabb: Aabb,
     light_bl_bvh_buffer: Option<Subbuffer<[BvhNode]>>,
 }
@@ -373,7 +373,7 @@ pub enum SceneUploadedObjectHandle {
         vertex_buffer: Subbuffer<[Vertex3D]>,
         light_bl_bvh_buffer: Option<Subbuffer<[BvhNode]>>,
         light_aabb: Aabb,
-        luminance: f32,
+        luminance: [f32; 6],
     },
 }
 
@@ -393,9 +393,7 @@ impl SceneUploader {
         assert!(vertexes.len() % 3 == 0);
 
         // gather data for every luminous triangle
-        let mut prim_centroids = vec![];
-        let mut prim_aabbs = vec![];
-        let mut prim_luminances = vec![];
+        let mut prim_luminance_per_area = vec![];
         let mut prim_index_ids = vec![];
         let mut prim_vertexes = vec![];
 
@@ -407,9 +405,7 @@ impl SceneUploader {
                 let c = Point3::from(vertexes[i * 3 + 2].position);
                 let area = (b - a).cross(&(c - a)).norm() / 2.0;
                 prim_vertexes.extend_from_slice(&[a, b, c]);
-                prim_centroids.push(Point3::from((a.coords + b.coords + c.coords) / 3.0));
-                prim_aabbs.push(Aabb::from_points(&[a, b, c]));
-                prim_luminances.push(luminance * area);
+                prim_luminance_per_area.push(luminance * area);
                 prim_index_ids.push(i as u32);
             }
         }
@@ -429,20 +425,12 @@ impl SceneUploader {
         )
         .unwrap();
 
-        if prim_centroids.len() > 0 {
-            let light_bl_bvh = bvh::build::build_bvh(
-                &prim_centroids,
-                &prim_aabbs,
-                &prim_luminances,
-                Some(&prim_vertexes),
+        if prim_index_ids.len() > 0 {
+            let (light_bl_bvh, light_aabb, luminance)  = bvh::build::build_bl_bvh(
+                &prim_luminance_per_area,
+                &prim_vertexes,
                 &prim_index_ids,
             );
-
-            let light_aabb = Aabb::from_points(&[
-                light_bl_bvh[0].min_or_v0.into(),
-                light_bl_bvh[0].max_or_v1.into(),
-            ]);
-            let luminance = light_bl_bvh[0].lum_f345;
 
             let light_bl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
@@ -469,7 +457,7 @@ impl SceneUploader {
             SceneUploadedObjectHandle::Uploaded {
                 vertex_buffer,
                 light_bl_bvh_buffer: None,
-                luminance: 0.0,
+                luminance: [0.0; 6],
                 light_aabb: Aabb::Empty,
             }
         }

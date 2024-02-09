@@ -7,70 +7,6 @@ use crate::{
 
 use super::super::vertex::Vertex3D;
 
-trait Primitive {
-    fn aabb(&self) -> Aabb;
-    fn centroid(&self) -> Point3<f32>;
-    fn luminance(&self) -> f32;
-}
-
-struct Triangle {
-    luminance: f32,
-    v0: Point3<f32>,
-    v1: Point3<f32>,
-    v2: Point3<f32>,
-}
-
-impl Primitive for Triangle {
-    fn aabb(&self) -> Aabb {
-        let min = self.v0.inf(&self.v1).inf(&self.v2);
-        let max = self.v0.sup(&self.v1).sup(&self.v2);
-        Aabb::NonEmpty { min, max }
-    }
-
-    fn centroid(&self) -> Point3<f32> {
-        Point3::from((self.v0.coords + self.v1.coords + self.v2.coords) / 3.0)
-    }
-
-    fn luminance(&self) -> f32 {
-        self.luminance
-    }
-}
-
-struct BlBvh {
-    nodes: Vec<BvhNode>,
-    transform: Isometry3<f32>,
-}
-
-impl Primitive for BlBvh {
-    fn aabb(&self) -> Aabb {
-        // enumerate all corners of the bounding box:
-        let min = Point3::from(self.nodes[0].min_or_v0);
-        let max = Point3::from(self.nodes[0].max_or_v1);
-
-        let corners = [
-            self.transform * min,
-            self.transform * Point3::new(min.x, min.y, max.z),
-            self.transform * Point3::new(min.x, max.y, min.z),
-            self.transform * Point3::new(min.x, max.y, max.z),
-            self.transform * Point3::new(max.x, min.y, min.z),
-            self.transform * Point3::new(max.x, min.y, max.z),
-            self.transform * Point3::new(max.x, max.y, min.z),
-            self.transform * max,
-        ];
-        Aabb::from_points(&corners)
-    }
-
-    fn centroid(&self) -> Point3<f32> {
-        let min = Point3::from(self.nodes[0].min_or_v0);
-        let max = Point3::from(self.nodes[0].max_or_v1);
-        self.transform * Point3::from((min.coords + max.coords) / 2.0)
-    }
-
-    fn luminance(&self) -> f32 {
-        self.nodes[0].lum_f345
-    }
-}
-
 #[derive(Clone, Debug)]
 struct BuildBvhLeaf {
     first_prim_idx_idx: usize,
@@ -299,23 +235,167 @@ fn insert_blas_leaf_node(
 }
 
 pub fn build_bl_bvh(
-    // the center of each primitive
-    prim_centroids: &[Point3<f32>],
+    // the power/area of each primitive
+    prim_luminance_per_area: &[f32],
+    // prim triangles
+    prim_vertexes: &[Point3<f32>],
+    // if this is a bottom level bvh, then this is the primitive index of each primitive
+    prim_index_ids: &[u32],
+) -> (Vec<BvhNode>, Aabb, [f32; 6]) {
+    let n_prims = prim_luminance_per_area.len();
+    assert_eq!(n_prims, prim_index_ids.len());
+
+    let mut prim_idxs = (0..n_prims).collect::<Vec<_>>();
+
+    let prim_aabbs = prim_vertexes
+        .chunks_exact(3)
+        .map(|chunk| Aabb::from_points(chunk))
+        .collect::<Vec<_>>();
+
+    let prim_centroids = prim_vertexes
+        .chunks_exact(3)
+        .map(|[v0, v1, v2]| Point3::from((v0.coords + v1.coords + v2.coords) / 3.0))
+        .collect::<Vec<_>>();
+
+    let (prim_luminances, prim_aabb_luminances): (Vec<_>, Vec<_>) = prim_vertexes
+        .chunks_exact(3)
+        .zip(prim_luminance_per_area)
+        .map(|([v0, v1, v2], lum)| {
+            let normal = (v1 - v0).cross(&(v2 - v0));
+            let area = normal.norm() / 2.0;
+            let luminance = lum * area;
+            (
+                luminance,
+                [
+                    luminance * f32::max(-normal.x, 0.0),
+                    luminance * f32::max(normal.x, 0.0),
+                    luminance * f32::max(-normal.y, 0.0),
+                    luminance * f32::max(normal.y, 0.0),
+                    luminance * f32::max(-normal.z, 0.0),
+                    luminance * f32::max(normal.z, 0.0),
+                ],
+            )
+        })
+        .unzip();
+
+    let mut nodes = vec![];
+
+    // create root node
+    let root_node_idx = insert_blas_leaf_node(
+        BuildBvhLeaf {
+            first_prim_idx_idx: 0,
+            prim_count: n_prims,
+        },
+        &mut nodes,
+        &prim_idxs,
+        &prim_aabbs,
+    );
+
+    // surface area metric
+    fn cost_function(aabb1: &Aabb, aabb2: &Aabb, count1: usize, count2: usize) -> f32 {
+        aabb1.area() * count1 as f32 + aabb2.area() * count2 as f32
+    }
+
+    subdivide(
+        root_node_idx,
+        &mut prim_idxs,
+        &prim_aabbs,
+        &prim_centroids,
+        &mut nodes,
+        &cost_function,
+    );
+
+    // nodes now contains a list of all the nodes in the blas.
+    // however, it contains rust constructs and is not able to be passed to the shader
+    // we now need to convert it into the finalized state that is optimized for gpu consumption
+    let mut opt_bvh = nodes
+        .into_iter()
+        .map(|node| match node.kind {
+            BuildBvhNodeKind::Leaf(ref leaf) => {
+                assert!(leaf.prim_count == 1);
+                let prim_idx = prim_idxs[leaf.first_prim_idx_idx];
+                let v0 = prim_vertexes[prim_idx * 3 + 0];
+                let v1 = prim_vertexes[prim_idx * 3 + 1];
+                let v2 = prim_vertexes[prim_idx * 3 + 2];
+                BvhNode {
+                    left_node_idx: u32::MAX,
+                    right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
+                    min_or_v0: v0.into(),
+                    max_or_v1: v1.into(),
+                    left_luminance_or_v2_1: v2.x,
+                    right_luminance_or_v2_2: v2.y,
+                    down_luminance_or_v2_3: v2.z,
+                    up_luminance_or_prim_luminance: prim_luminances[prim_idx],
+                    ..Default::default()
+                }
+            }
+            BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
+                left_node_idx: internal_node.left_child_idx as u32,
+                right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
+                min_or_v0: node.aabb.min().coords.into(),
+                max_or_v1: node.aabb.max().coords.into(),
+                ..Default::default()
+            },
+        })
+        .collect::<Vec<_>>();
+
+    // compute luminance values for non-leaf nodes
+    // the luminance of a node is the sum of the luminance of its children
+
+    // the list is topologically sorted so we can just iterate over it in reverse order, and be sure that all the children of a node have already been processed
+    for i in (0..opt_bvh.len()).rev() {
+        if opt_bvh[i].left_node_idx != u32::MAX {
+            // internal node
+            let left_child_idx = opt_bvh[i].left_node_idx as usize;
+            let right_child_idx = opt_bvh[i].right_node_idx_or_prim_idx as usize;
+
+            // process left child
+            for child_idx in [left_child_idx, right_child_idx] {
+                let child = &opt_bvh[child_idx];
+                if child.left_node_idx == u32::MAX {
+                    // child is a leaf
+                    let child_aabb_luminance = prim_aabb_luminances[left_child_idx];
+                    opt_bvh[i].left_luminance_or_v2_1 += child_aabb_luminance[0];
+                    opt_bvh[i].right_luminance_or_v2_2 += child_aabb_luminance[1];
+                    opt_bvh[i].down_luminance_or_v2_3 += child_aabb_luminance[2];
+                    opt_bvh[i].up_luminance_or_prim_luminance += child_aabb_luminance[3];
+                    opt_bvh[i].back_luminance += child_aabb_luminance[4];
+                    opt_bvh[i].front_luminance += child_aabb_luminance[5];
+                } else {
+                    // child is an internal node
+                    opt_bvh[i].left_luminance_or_v2_1 += child.left_luminance_or_v2_1;
+                    opt_bvh[i].right_luminance_or_v2_2 += child.right_luminance_or_v2_2;
+                    opt_bvh[i].down_luminance_or_v2_3 += child.down_luminance_or_v2_3;
+                    opt_bvh[i].up_luminance_or_prim_luminance +=
+                        child.up_luminance_or_prim_luminance;
+                    opt_bvh[i].back_luminance += child.back_luminance;
+                    opt_bvh[i].front_luminance += child.front_luminance;
+                }
+            }
+        }
+    }
+
+    opt_bvh
+}
+
+pub fn build_tl_bvh(
     // the bounding box of each primitive
     prim_aabbs: &[Aabb],
     // how much power is in each primitive
-    prim_luminances: &[f32],
-    // prim triangles
-    prim_vertexes: &[Point3<f32>],
-    // the meaning of this parameter varies depending on whether this is a top level or bottom level bvh
-    // if this is a top level bvh, then this is the instance id of each primitive
-    // if this is a bottom level bvh, then this is the primitive index of each primitive
+    prim_luminances: &[[f32; 6]],
+    // instance id of each bl bvh
     prim_index_ids: &[u32],
 ) -> Vec<BvhNode> {
-    let n_prims = prim_centroids.len();
-    assert_eq!(n_prims, prim_aabbs.len());
+    let n_prims = prim_aabbs.len();
+    assert_eq!(n_prims, prim_luminances.len());
+    assert_eq!(n_prims, prim_index_ids.len());
 
     let mut prim_idxs = (0..n_prims).collect::<Vec<_>>();
+
+    let prim_centroids = prim_aabbs
+        .iter()
+        .map(|aabb| Point3::from((aabb.min().coords + aabb.max().coords) / 2.0))
+        .collect::<Vec<_>>();
 
     let mut nodes = vec![];
 
@@ -354,21 +434,24 @@ pub fn build_bl_bvh(
                 assert!(leaf.prim_count == 1);
                 let prim_idx = prim_idxs[leaf.first_prim_idx_idx];
                 BvhNode {
-                    min_or_v0: vertexes[prim_idx * 3 + 0].into(),
-                    max_or_v1: vertexes[prim_idx * 3 + 1].into(),
-                    lum_f123_or_v2: vertexes[prim_idx * 3 + 2].into(),
-                    lum_f345: prim_luminances[prim_idx],
                     left_node_idx: u32::MAX,
                     right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
+                    min_or_v0: prim_aabbs[prim_idx].min().coords.into(),
+                    max_or_v1: prim_aabbs[prim_idx].max().coords.into(),
+                    left_luminance_or_v2_1: prim_luminances[prim_idx][0],
+                    right_luminance_or_v2_2: prim_luminances[prim_idx][1],
+                    down_luminance_or_v2_3: prim_luminances[prim_idx][2],
+                    up_luminance_or_prim_luminance: prim_luminances[prim_idx][3],
+                    back_luminance: prim_luminances[prim_idx][4],
+                    front_luminance: prim_luminances[prim_idx][5],
                 }
             }
             BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
-                min_or_v0: node.aabb.min().coords.into(),
-                max_or_v1: node.aabb.max().coords.into(),
-                lum_f123_or_v2: [0.0; 3],
-                lum_f345: 0.0,
                 left_node_idx: internal_node.left_child_idx as u32,
                 right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
+                min_or_v0: node.aabb.min().coords.into(),
+                max_or_v1: node.aabb.max().coords.into(),
+                ..Default::default()
             },
         })
         .collect::<Vec<_>>();
@@ -381,128 +464,19 @@ pub fn build_bl_bvh(
     for i in (0..opt_bvh.len()).rev() {
         if opt_bvh[i].left_node_idx != u32::MAX {
             // internal node
-            let left_child = &opt_bvh[opt_bvh[i].left_node_idx as usize];
-            let right_child = &opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize];
-            opt_bvh[i].lum_f345 = left_child.lum_f345 + right_child.lum_f345;
-        }
-    }
+            let left_child = opt_bvh[opt_bvh[i].left_node_idx as usize];
+            let right_child = opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize];
 
-    opt_bvh
-}
-
-pub fn build_tl_bvh(
-    // the center of each primitive
-    prim_centroids: &[Point3<f32>],
-    // the bounding box of each primitive
-    prim_aabbs: &[Aabb],
-    // how much power is in each primitive
-    prim_luminances: &[f32],
-    // prim triangles
-    prim_vertexes: Option<&[Point3<f32>]>,
-    // the meaning of this parameter varies depending on whether this is a top level or bottom level bvh
-    // if this is a top level bvh, then this is the instance id of each primitive
-    // if this is a bottom level bvh, then this is the primitive index of each primitive
-    prim_index_ids: &[u32],
-) -> Vec<BvhNode> {
-    let n_prims = prim_centroids.len();
-    assert_eq!(n_prims, prim_aabbs.len());
-
-    let mut prim_idxs = (0..n_prims).collect::<Vec<_>>();
-
-    let mut nodes = vec![];
-
-    // create root node
-    let root_node_idx = insert_blas_leaf_node(
-        BuildBvhLeaf {
-            first_prim_idx_idx: 0,
-            prim_count: n_prims,
-        },
-        &mut nodes,
-        &prim_idxs,
-        &prim_aabbs,
-    );
-
-    // surface area metric
-    fn cost_function(aabb1: &Aabb, aabb2: &Aabb, count1: usize, count2: usize) -> f32 {
-        aabb1.area() * count1 as f32 + aabb2.area() * count2 as f32
-    }
-
-    subdivide(
-        root_node_idx,
-        &mut prim_idxs,
-        &prim_aabbs,
-        &prim_centroids,
-        &mut nodes,
-        &cost_function,
-    );
-
-    // nodes now contains a list of all the nodes in the blas.
-    // however, it contains rust constructs and is not able to be passed to the shader
-    // we now need to convert it into the finalized state that is optimized for gpu consumption
-    let mut opt_bvh = match prim_vertexes {
-        Some(vertexes) => nodes
-            .into_iter()
-            .map(|node| match node.kind {
-                BuildBvhNodeKind::Leaf(ref leaf) => {
-                    assert!(leaf.prim_count == 1);
-                    let prim_idx = prim_idxs[leaf.first_prim_idx_idx];
-                    BvhNode {
-                        min_or_v0: vertexes[prim_idx * 3 + 0].into(),
-                        max_or_v1: vertexes[prim_idx * 3 + 1].into(),
-                        lum_f123_or_v2: vertexes[prim_idx * 3 + 2].into(),
-                        lum_f345: prim_luminances[prim_idx],
-                        left_node_idx: u32::MAX,
-                        right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
-                    }
-                }
-                BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
-                    min_or_v0: node.aabb.min().coords.into(),
-                    max_or_v1: node.aabb.max().coords.into(),
-                    lum_f123_or_v2: [0.0; 3],
-                    lum_f345: 0.0,
-                    left_node_idx: internal_node.left_child_idx as u32,
-                    right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
-                },
-            })
-            .collect::<Vec<_>>(),
-        None => nodes
-            .into_iter()
-            .map(|node| match node.kind {
-                BuildBvhNodeKind::Leaf(ref leaf) => {
-                    assert!(leaf.prim_count == 1);
-                    let prim_idx = prim_idxs[leaf.first_prim_idx_idx];
-                    BvhNode {
-                        min_or_v0: prim_aabbs[prim_idx].min().coords.into(),
-                        max_or_v1: prim_aabbs[prim_idx].max().coords.into(),
-                        lum_f123_or_v2: [0.0; 3],
-                        lum_f345: prim_luminances[prim_idx],
-                        left_node_idx: u32::MAX,
-                        right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
-                    }
-                }
-                BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
-                    min_or_v0: node.aabb.min().coords.into(),
-                    max_or_v1: node.aabb.max().coords.into(),
-                    lum_f123_or_v2: [0.0; 3],
-                    lum_f345: 0.0,
-                    left_node_idx: internal_node.left_child_idx as u32,
-                    right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
-                },
-            })
-            .collect::<Vec<_>>(),
-    };
-
-    // compute luminance values for non-leaf nodes
-    // the luminance of a node is the sum of the luminance of its children
-    // the luminance of a leaf node is the luminance of the primitive it contains
-
-    // the list is topologically sorted so we can just iterate over it in reverse order, and be sure that all the children of a node have already been processed
-    for i in (0..opt_bvh.len()).rev() {
-        if opt_bvh[i].left_node_idx != u32::MAX {
-            // internal node
-            let left_child = &opt_bvh[opt_bvh[i].left_node_idx as usize];
-            let right_child = &opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize];
-            opt_bvh[i].lum_f345 = left_child.lum_f345 + right_child.lum_f345;
+            // process left child
+            for child in [left_child, right_child] {
+                // child is an internal node
+                opt_bvh[i].left_luminance_or_v2_1 += child.left_luminance_or_v2_1;
+                opt_bvh[i].right_luminance_or_v2_2 += child.right_luminance_or_v2_2;
+                opt_bvh[i].down_luminance_or_v2_3 += child.down_luminance_or_v2_3;
+                opt_bvh[i].up_luminance_or_prim_luminance += child.up_luminance_or_prim_luminance;
+                opt_bvh[i].back_luminance += child.back_luminance;
+                opt_bvh[i].front_luminance += child.front_luminance;
+            }
         }
     }
 
@@ -541,35 +515,35 @@ fn create_blas_visualization(blas_nodes: &Vec<BvhNode>) -> Vec<Vertex3D> {
     vertexes
 }
 
-pub fn test_blas() -> Vec<Vertex3D> {
-    let mut prim_aabbs = vec![];
-    let mut prim_centroids = vec![];
-    let mut prim_luminances = vec![];
-    let mut prim_gl_ids = vec![];
-    for i in 0..100 {
-        // find a random point
-        let x = rand::random::<f32>() * 40.0 - 20.0;
-        let y = rand::random::<f32>() * 40.0 - 20.0;
-        let z = rand::random::<f32>() * 40.0 - 20.0;
-        let luminance = rand::random::<f32>() * 10.0;
+// pub fn test_blas() -> Vec<Vertex3D> {
+//     let mut prim_aabbs = vec![];
+//     let mut prim_centroids = vec![];
+//     let mut prim_luminances = vec![];
+//     let mut prim_gl_ids = vec![];
+//     for i in 0..100 {
+//         // find a random point
+//         let x = rand::random::<f32>() * 40.0 - 20.0;
+//         let y = rand::random::<f32>() * 40.0 - 20.0;
+//         let z = rand::random::<f32>() * 40.0 - 20.0;
+//         let luminance = rand::random::<f32>() * 10.0;
 
-        let v0 = Point3::new(x, y, z);
-        let v1 = Point3::new(x, y + 0.1, z);
-        let v2 = Point3::new(x, y, z + 0.1);
+//         let v0 = Point3::new(x, y, z);
+//         let v1 = Point3::new(x, y + 0.1, z);
+//         let v2 = Point3::new(x, y, z + 0.1);
 
-        prim_aabbs.push(Aabb::from_points(&[v0, v1, v2]));
-        prim_centroids.push(Point3::from((v0.coords + v1.coords + v2.coords) / 3.0));
-        prim_luminances.push(luminance);
-        prim_gl_ids.push(i as u32);
-    }
+//         prim_aabbs.push(Aabb::from_points(&[v0, v1, v2]));
+//         prim_centroids.push(Point3::from((v0.coords + v1.coords + v2.coords) / 3.0));
+//         prim_luminances.push(luminance);
+//         prim_gl_ids.push(i as u32);
+//     }
 
-    let nodes = build_bvh(
-        &prim_centroids,
-        &prim_aabbs,
-        &prim_luminances,
-        None,
-        &prim_gl_ids,
-    );
+//     let nodes = build_bvh(
+//         &prim_centroids,
+//         &prim_aabbs,
+//         &prim_luminances,
+//         None,
+//         &prim_gl_ids,
+//     );
 
-    create_blas_visualization(&nodes)
-}
+//     create_blas_visualization(&nodes)
+// }

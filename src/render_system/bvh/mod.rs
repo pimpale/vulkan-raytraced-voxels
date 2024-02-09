@@ -29,8 +29,8 @@ pub struct BvhNode {
     pub front_luminance: f32,
 }
 
-impl BvhNode {
-    pub fn dummy() -> BvhNode {
+impl Default for BvhNode {
+    fn default() -> BvhNode {
         BvhNode {
             left_node_idx: 0xFFFFFFFF,
             right_node_idx_or_prim_idx: 0xFFFFFFFF,
