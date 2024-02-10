@@ -305,6 +305,9 @@ pub fn build_bl_bvh(
         &cost_function,
     );
 
+    // mapping from opt_bvh index to prim index
+    let mut opt_bvh_idx_to_prim_idx = vec![];
+
     // nodes now contains a list of all the nodes in the blas.
     // however, it contains rust constructs and is not able to be passed to the shader
     // we now need to convert it into the finalized state that is optimized for gpu consumption
@@ -317,6 +320,7 @@ pub fn build_bl_bvh(
                 let v0 = prim_vertexes[prim_idx * 3 + 0];
                 let v1 = prim_vertexes[prim_idx * 3 + 1];
                 let v2 = prim_vertexes[prim_idx * 3 + 2];
+                opt_bvh_idx_to_prim_idx.push(Some(prim_idx));
                 BvhNode {
                     left_node_idx: u32::MAX,
                     right_node_idx_or_prim_idx: prim_index_ids[prim_idx] as u32,
@@ -329,13 +333,16 @@ pub fn build_bl_bvh(
                     ..Default::default()
                 }
             }
-            BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
-                left_node_idx: internal_node.left_child_idx as u32,
-                right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
-                min_or_v0: node.aabb.min().coords.into(),
-                max_or_v1: node.aabb.max().coords.into(),
-                ..Default::default()
-            },
+            BuildBvhNodeKind::InternalNode(ref internal_node) => {
+                opt_bvh_idx_to_prim_idx.push(None);
+                BvhNode {
+                    left_node_idx: internal_node.left_child_idx as u32,
+                    right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
+                    min_or_v0: node.aabb.min().coords.into(),
+                    max_or_v1: node.aabb.max().coords.into(),
+                    ..Default::default()
+                }
+            }
         })
         .collect::<Vec<_>>();
 
@@ -354,7 +361,8 @@ pub fn build_bl_bvh(
                 let child = &opt_bvh[child_idx].clone();
                 if child.left_node_idx == u32::MAX {
                     // child is a leaf
-                    let child_aabb_luminance = prim_aabb_luminances[left_child_idx];
+                    let child_aabb_luminance =
+                        prim_aabb_luminances[opt_bvh_idx_to_prim_idx[child_idx].unwrap()];
                     opt_bvh[i].left_luminance_or_v2_1 += child_aabb_luminance[0];
                     opt_bvh[i].right_luminance_or_v2_2 += child_aabb_luminance[1];
                     opt_bvh[i].down_luminance_or_v2_3 += child_aabb_luminance[2];

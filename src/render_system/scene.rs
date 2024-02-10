@@ -50,6 +50,15 @@ enum TopLevelAccelerationStructureState {
     NeedsRebuild,
 }
 
+struct FrameData {
+    // objects removed in this frame
+    removed_objects: Vec<Object>,
+    // instance_data
+    instance_data: Option<Subbuffer<[InstanceData]>>,
+    // luminance_bvh
+    luminance_bvh: Option<Subbuffer<[BvhNode]>>,
+}
+
 /// Corresponds to a TLAS
 pub struct Scene<K> {
     general_queue: Arc<Queue>,
@@ -59,7 +68,7 @@ pub struct Scene<K> {
     texture_luminances: Vec<f32>,
     objects: BTreeMap<K, Option<Object>>,
     // we have to keep around old objects for n_swapchain_images frames to ensure that the TLAS is not in use
-    old_objects: VecDeque<Vec<Object>>,
+    old_data: VecDeque<FrameData>,
     n_swapchain_images: usize,
     // cached data from the last frame
     cached_tlas: Option<Arc<AccelerationStructure>>,
@@ -98,7 +107,11 @@ where
             memory_allocator,
             texture_luminances,
             objects: BTreeMap::new(),
-            old_objects: VecDeque::from([vec![]]),
+            old_data: VecDeque::from([FrameData {
+                removed_objects: vec![],
+                instance_data: None,
+                luminance_bvh: None,
+            }]),
             n_swapchain_images,
             cached_tlas: None,
             cached_instance_data: None,
@@ -171,16 +184,15 @@ where
     pub fn remove_object(&mut self, key: K) {
         let removed = self.objects.remove(&key);
         if let Some(removed) = removed.flatten() {
-            self.old_objects[0].push(removed);
+            self.old_data[0].removed_objects.push(removed);
             self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
         }
     }
 
     // SAFETY: after calling this function, any TLAS previously returned by get_tlas() is invalid, and must not in use
     pub unsafe fn dispose_old_objects(&mut self) {
-        self.old_objects.push_front(vec![]);
-        while self.old_objects.len() > self.n_swapchain_images + 10 {
-            self.old_objects.pop_back();
+        while self.old_data.len() > self.n_swapchain_images + 10 {
+            self.old_data.pop_back();
         }
     }
 
@@ -346,6 +358,13 @@ where
 
         // at this point the tlas is up to date
         self.cached_tlas_state = TopLevelAccelerationStructureState::UpToDate;
+
+        // save a reference to the old data so that it's not dropped
+        self.old_data.push_front(FrameData {
+            removed_objects: vec![],
+            instance_data: self.cached_instance_data.clone(),
+            luminance_bvh: self.cached_luminance_bvh.clone(),
+        });
 
         // return the tlas
         return (
