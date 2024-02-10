@@ -1,4 +1,4 @@
-use nalgebra::{Isometry3, Point3, Vector3};
+use nalgebra::{matrix, vector, Isometry3, Point3, Vector3, Vector6};
 
 use crate::{
     render_system::bvh::{aabb::Aabb, BvhNode},
@@ -248,17 +248,17 @@ pub fn build_bl_bvh(
     let mut prim_idxs = (0..n_prims).collect::<Vec<_>>();
 
     let prim_aabbs = prim_vertexes
-        .chunks_exact(3)
-        .map(|chunk| Aabb::from_points(chunk))
+        .array_chunks()
+        .map(|chunk: &[Point3<f32>; 3]| Aabb::from_points(chunk))
         .collect::<Vec<_>>();
 
     let prim_centroids = prim_vertexes
-        .chunks_exact(3)
+        .array_chunks()
         .map(|[v0, v1, v2]| Point3::from((v0.coords + v1.coords + v2.coords) / 3.0))
         .collect::<Vec<_>>();
 
     let (prim_luminances, prim_aabb_luminances): (Vec<_>, Vec<_>) = prim_vertexes
-        .chunks_exact(3)
+        .array_chunks()
         .zip(prim_luminance_per_area)
         .map(|([v0, v1, v2], lum)| {
             let normal = (v1 - v0).cross(&(v2 - v0));
@@ -351,7 +351,7 @@ pub fn build_bl_bvh(
 
             // process left child
             for child_idx in [left_child_idx, right_child_idx] {
-                let child = &opt_bvh[child_idx];
+                let child = &opt_bvh[child_idx].clone();
                 if child.left_node_idx == u32::MAX {
                     // child is a leaf
                     let child_aabb_luminance = prim_aabb_luminances[left_child_idx];
@@ -375,10 +375,31 @@ pub fn build_bl_bvh(
         }
     }
 
-    opt_bvh
+    if opt_bvh[0].left_node_idx == u32::MAX {
+        // leaf node
+        (opt_bvh, prim_aabbs[0], prim_aabb_luminances[0])
+    } else {
+        // not leaf node
+        let aabb = Aabb::NonEmpty {
+            min: opt_bvh[0].min_or_v0.into(),
+            max: opt_bvh[0].max_or_v1.into(),
+        };
+
+        let luminance = [
+            opt_bvh[0].left_luminance_or_v2_1,
+            opt_bvh[0].right_luminance_or_v2_2,
+            opt_bvh[0].down_luminance_or_v2_3,
+            opt_bvh[0].up_luminance_or_prim_luminance,
+            opt_bvh[0].back_luminance,
+            opt_bvh[0].front_luminance,
+        ];
+        (opt_bvh, aabb, luminance)
+    }
 }
 
 pub fn build_tl_bvh(
+    // the transformation applied to each primitive
+    prim_isometries: &[Isometry3<f32>],
     // the bounding box of each primitive
     prim_aabbs: &[Aabb],
     // how much power is in each primitive
@@ -389,8 +410,67 @@ pub fn build_tl_bvh(
     let n_prims = prim_aabbs.len();
     assert_eq!(n_prims, prim_luminances.len());
     assert_eq!(n_prims, prim_index_ids.len());
+    assert_eq!(n_prims, prim_isometries.len());
 
     let mut prim_idxs = (0..n_prims).collect::<Vec<_>>();
+
+    let prim_aabbs = prim_aabbs
+        .into_iter()
+        .zip(prim_isometries.iter())
+        .map(|(aabb, isometry)| aabb.transform(isometry))
+        .collect::<Vec<_>>();
+
+    let prim_luminances = prim_luminances
+        .into_iter()
+        .zip(prim_isometries.iter())
+        .map(|(luminances, isometry)| {
+            let r = isometry.rotation.inverse();
+            let v0 = luminances[0] * (r * vector![-1.0, 0.0, 0.0]);
+            let v1 = luminances[1] * (r * vector![1.0, 0.0, 0.0]);
+            let v2 = luminances[2] * (r * vector![0.0, -1.0, 0.0]);
+            let v3 = luminances[3] * (r * vector![0.0, 1.0, 0.0]);
+            let v4 = luminances[4] * (r * vector![0.0, 0.0, -1.0]);
+            let v5 = luminances[5] * (r * vector![0.0, 0.0, 1.0]);
+            [
+                v0.x.max(0.0)
+                    + v1.x.max(0.0)
+                    + v2.x.max(0.0)
+                    + v3.x.max(0.0)
+                    + v4.x.max(0.0)
+                    + v5.x.max(0.0),
+                (-v0.x).max(0.0)
+                    + (-v1.x).max(0.0)
+                    + (-v2.x).max(0.0)
+                    + (-v3.x).max(0.0)
+                    + (-v4.x).max(0.0)
+                    + (-v5.x).max(0.0),
+                v0.y.max(0.0)
+                    + v1.y.max(0.0)
+                    + v2.y.max(0.0)
+                    + v3.y.max(0.0)
+                    + v4.y.max(0.0)
+                    + v5.y.max(0.0),
+                (-v0.y).max(0.0)
+                    + (-v1.y).max(0.0)
+                    + (-v2.y).max(0.0)
+                    + (-v3.y).max(0.0)
+                    + (-v4.y).max(0.0)
+                    + (-v5.y).max(0.0),
+                v0.z.max(0.0)
+                    + v1.z.max(0.0)
+                    + v2.z.max(0.0)
+                    + v3.z.max(0.0)
+                    + v4.z.max(0.0)
+                    + v5.z.max(0.0),
+                (-v0.z).max(0.0)
+                    + (-v1.z).max(0.0)
+                    + (-v2.z).max(0.0)
+                    + (-v3.z).max(0.0)
+                    + (-v4.z).max(0.0)
+                    + (-v5.z).max(0.0),
+            ]
+        })
+        .collect::<Vec<_>>();
 
     let prim_centroids = prim_aabbs
         .iter()
@@ -464,8 +544,8 @@ pub fn build_tl_bvh(
     for i in (0..opt_bvh.len()).rev() {
         if opt_bvh[i].left_node_idx != u32::MAX {
             // internal node
-            let left_child = opt_bvh[opt_bvh[i].left_node_idx as usize];
-            let right_child = opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize];
+            let left_child = opt_bvh[opt_bvh[i].left_node_idx as usize].clone();
+            let right_child = opt_bvh[opt_bvh[i].right_node_idx_or_prim_idx as usize].clone();
 
             // process left child
             for child in [left_child, right_child] {

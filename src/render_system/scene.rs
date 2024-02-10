@@ -235,7 +235,7 @@ where
             .unwrap();
             self.cached_instance_data = Some(instance_data);
 
-            let ((centroids, aabbs), (luminances, instance_ids)): (
+            let ((isometries, aabbs), (luminances, instance_ids)): (
                 (Vec<_>, Vec<_>),
                 (Vec<_>, Vec<_>),
             ) = self
@@ -252,24 +252,20 @@ where
                             isometry,
                             ..
                         },
-                    )| {
-                        if *luminance > 0.0 {
-                            let transformed = light_aabb.transform(isometry);
-                            Some((
-                                (transformed.centroid(), transformed),
-                                (*luminance, i as u32),
-                            ))
-                        } else {
-                            None
-                        }
+                    )| match light_aabb {
+                        Aabb::Empty => None,
+                        light_aabb => Some((
+                            (isometry.clone(), light_aabb.clone()),
+                            (luminance.clone(), i as u32),
+                        )),
                     },
                 )
                 .unzip();
 
-            let light_tl_bvh = if centroids.len() == 0 {
-                vec![BvhNode::dummy()]
+            let light_tl_bvh = if aabbs.len() == 0 {
+                vec![BvhNode::default()]
             } else {
-                bvh::build::build_bvh(&centroids, &aabbs, &luminances, None, &instance_ids)
+                bvh::build::build_tl_bvh(&isometries, &aabbs, &luminances, &instance_ids)
             };
 
             let light_tl_bvh_buffer = Buffer::from_iter(
@@ -426,11 +422,8 @@ impl SceneUploader {
         .unwrap();
 
         if prim_index_ids.len() > 0 {
-            let (light_bl_bvh, light_aabb, luminance)  = bvh::build::build_bl_bvh(
-                &prim_luminance_per_area,
-                &prim_vertexes,
-                &prim_index_ids,
-            );
+            let (light_bl_bvh, light_aabb, luminance) =
+                bvh::build::build_bl_bvh(&prim_luminance_per_area, &prim_vertexes, &prim_index_ids);
 
             let light_bl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
