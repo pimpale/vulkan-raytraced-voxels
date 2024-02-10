@@ -446,6 +446,8 @@ impl SceneUploader {
             let (light_bl_bvh, light_aabb, luminance) =
                 bvh::build::build_bl_bvh(&prim_luminance_per_area, &prim_vertexes, &prim_index_ids);
 
+            dbg!(&light_bl_bvh);
+
             let light_bl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {

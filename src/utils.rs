@@ -101,7 +101,7 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
 
     let mut vertexes = vec![];
 
-    let off = 6*1;
+    let off = 6*3;
     // left face
     {
         let t = 0+off;

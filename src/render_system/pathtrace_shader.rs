@@ -194,11 +194,6 @@ vulkano_shaders::shader! {
             return false;
         }
 
-        // returns true if the point is past the plane defined by the triangle
-        bool pointIsVisibleFromPlane(vec3 point, vec3 plane_point, vec3 plane_normal) {
-            return dot(point - plane_point, plane_normal) >= 0.0;
-        }
-
         // gets the importance of a node relative to a point on a surface, specialized for leaf nodes
         float nodeImportance(bool topLevel, vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
             // replace node with lower level node to get better bounds
@@ -227,35 +222,41 @@ vulkano_shaders::shader! {
 
                 float luminance = 0.0;
                 
+                vec3 lv = v000 - v100;
                 luminance +=
                     node.left_luminance_or_v2_1 
                     * float(rectIsVisible(point, normal, vec3[4](v100, v101, v111, v110)))
-                    * float(pointIsVisibleFromPlane(point, v100, v000 - v100));
+                    * clamp(dot(point - v100, lv)/lengthSquared(lv), 0.0, 1.0);
 
+                vec3 rv = v100 - v000;
                 luminance +=
                     node.right_luminance_or_v2_2 
                     * float(rectIsVisible(point, normal, vec3[4](v000, v001, v011, v010)))
-                    * float(pointIsVisibleFromPlane(point, v000, v100 - v000));                
+                    * clamp(dot(point - v000, rv)/lengthSquared(rv), 0.0, 1.0);                
                 
+                vec3 dv = v000 - v010;
                 luminance +=
                     node.down_luminance_or_v2_3 
                     * float(rectIsVisible(point, normal, vec3[4](v010, v011, v111, v110)))
-                    * float(pointIsVisibleFromPlane(point, v010, v000 - v010));
-                
+                    * clamp(dot(point - v010, dv)/lengthSquared(dv), 0.0, 1.0);
+
+                vec3 uv = v010 - v000;                
                 luminance +=
                     node.up_luminance_or_prim_luminance
                     * float(rectIsVisible(point, normal, vec3[4](v000, v001, v101, v100)))
-                    * float(pointIsVisibleFromPlane(point, v000, v010 - v000));
+                    * clamp(dot(point - v000, uv)/lengthSquared(uv), 0.0, 1.0);
 
+                vec3 bv = v000 - v001;
                 luminance +=
                     node.back_luminance
                     * float(rectIsVisible(point, normal, vec3[4](v001, v011, v111, v101)))
-                    * float(pointIsVisibleFromPlane(point, v001, v000 - v001));
+                    * clamp(dot(point - v001, bv)/lengthSquared(bv), 0.0, 1.0);
 
+                vec3 fv = v001 - v000;
                 luminance +=
                     node.front_luminance
                     * float(rectIsVisible(point, normal, vec3[4](v000, v010, v110, v100)))
-                    * float(pointIsVisibleFromPlane(point, v000, v001 - v000));
+                    * clamp(dot(point - v000, fv)/lengthSquared(fv), 0.0, 1.0);
 
                 return luminance / distance_sq;
             } else {
@@ -348,6 +349,9 @@ vulkano_shaders::shader! {
                 float left_importance_normalized = left_importance / total_importance;
                 float right_importance_normalized = right_importance / total_importance;
                 
+                if(gl_GlobalInvocationID.x > push_constants.camera.screen_size.x/2)
+                    left_importance_normalized = 0.5;
+
                 if (total_importance == 0.0) {
                     return BvhTraverseResult(
                         false,

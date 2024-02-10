@@ -305,6 +305,8 @@ pub fn build_bl_bvh(
         &cost_function,
     );
 
+    let padding = vector![0.0001, 0.0001, 0.0001];
+
     // mapping from opt_bvh index to prim index
     let mut opt_bvh_idx_to_prim_idx = vec![];
 
@@ -338,8 +340,8 @@ pub fn build_bl_bvh(
                 BvhNode {
                     left_node_idx: internal_node.left_child_idx as u32,
                     right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
-                    min_or_v0: node.aabb.min().coords.into(),
-                    max_or_v1: node.aabb.max().coords.into(),
+                    min_or_v0: (node.aabb.min().coords - padding).into(),
+                    max_or_v1: (node.aabb.max().coords + padding).into(),
                     ..Default::default()
                 }
             }
@@ -440,42 +442,42 @@ pub fn build_tl_bvh(
             let v4 = luminances[4] * (r * vector![0.0, 0.0, -1.0]);
             let v5 = luminances[5] * (r * vector![0.0, 0.0, 1.0]);
             [
-                v0.x.max(0.0)
-                    + v1.x.max(0.0)
-                    + v2.x.max(0.0)
-                    + v3.x.max(0.0)
-                    + v4.x.max(0.0)
-                    + v5.x.max(0.0),
                 (-v0.x).max(0.0)
                     + (-v1.x).max(0.0)
                     + (-v2.x).max(0.0)
                     + (-v3.x).max(0.0)
                     + (-v4.x).max(0.0)
                     + (-v5.x).max(0.0),
-                v0.y.max(0.0)
-                    + v1.y.max(0.0)
-                    + v2.y.max(0.0)
-                    + v3.y.max(0.0)
-                    + v4.y.max(0.0)
-                    + v5.y.max(0.0),
+                v0.x.max(0.0)
+                    + v1.x.max(0.0)
+                    + v2.x.max(0.0)
+                    + v3.x.max(0.0)
+                    + v4.x.max(0.0)
+                    + v5.x.max(0.0),
                 (-v0.y).max(0.0)
                     + (-v1.y).max(0.0)
                     + (-v2.y).max(0.0)
                     + (-v3.y).max(0.0)
                     + (-v4.y).max(0.0)
                     + (-v5.y).max(0.0),
-                v0.z.max(0.0)
-                    + v1.z.max(0.0)
-                    + v2.z.max(0.0)
-                    + v3.z.max(0.0)
-                    + v4.z.max(0.0)
-                    + v5.z.max(0.0),
+                v0.y.max(0.0)
+                    + v1.y.max(0.0)
+                    + v2.y.max(0.0)
+                    + v3.y.max(0.0)
+                    + v4.y.max(0.0)
+                    + v5.y.max(0.0),
                 (-v0.z).max(0.0)
                     + (-v1.z).max(0.0)
                     + (-v2.z).max(0.0)
                     + (-v3.z).max(0.0)
                     + (-v4.z).max(0.0)
                     + (-v5.z).max(0.0),
+                v0.z.max(0.0)
+                    + v1.z.max(0.0)
+                    + v2.z.max(0.0)
+                    + v3.z.max(0.0)
+                    + v4.z.max(0.0)
+                    + v5.z.max(0.0),
             ]
         })
         .collect::<Vec<_>>();
@@ -512,6 +514,8 @@ pub fn build_tl_bvh(
         &cost_function,
     );
 
+    let padding = vector![0.0001, 0.0001, 0.0001];
+
     // nodes now contains a list of all the nodes in the blas.
     // however, it contains rust constructs and is not able to be passed to the shader
     // we now need to convert it into the finalized state that is optimized for gpu consumption
@@ -537,8 +541,8 @@ pub fn build_tl_bvh(
             BuildBvhNodeKind::InternalNode(ref internal_node) => BvhNode {
                 left_node_idx: internal_node.left_child_idx as u32,
                 right_node_idx_or_prim_idx: internal_node.right_child_idx as u32,
-                min_or_v0: node.aabb.min().coords.into(),
-                max_or_v1: node.aabb.max().coords.into(),
+                min_or_v0: (node.aabb.min().coords - padding).into(),
+                max_or_v1: (node.aabb.max().coords + padding).into(),
                 ..Default::default()
             },
         })
