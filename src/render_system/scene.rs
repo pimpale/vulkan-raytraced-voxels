@@ -268,6 +268,8 @@ where
                 bvh::build::build_tl_bvh(&isometries, &aabbs, &luminances, &instance_ids)
             };
 
+            dbg!(&light_tl_bvh);
+
             let light_tl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {

@@ -201,13 +201,13 @@ vulkano_shaders::shader! {
 
         // gets the importance of a node relative to a point on a surface, specialized for leaf nodes
         float nodeImportance(bool topLevel, vec3 point, vec3 normal, mat4x3 transform, BvhNode node) {
-            // replace node with lower level node to get better bounds
-            if(topLevel && node.left_node_idx == 0xFFFFFFFF) {
-                InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
-                transform = id.transform;
-                topLevel = false;
-                node = BvhNode(id.bvh_node_buffer_addr);
-            }
+            // // replace node with lower level node to get better bounds
+            // if(topLevel && node.left_node_idx == 0xFFFFFFFF) {
+            //     InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
+            //     transform = id.transform;
+            //     topLevel = false;
+            //     node = BvhNode(id.bvh_node_buffer_addr);
+            // }
             
             if(topLevel || node.left_node_idx != 0xFFFFFFFF) {                
                 // get corners
@@ -318,8 +318,27 @@ vulkano_shaders::shader! {
             mat4x3 transform = mat4x3(1.0);
             uint instance_index = 0xFFFFFFFF;
             bool topLevel = true;
+            int depth = 0;
             while(true) {
+                depth++;
+                if(depth > 2) {
+                    return BvhTraverseResult(
+                        false,
+                        0,
+                        0,
+                        0.0,
+                        0.0
+                    );
+                }
                 if(node.left_node_idx == 0xFFFFFFFF) {
+                    return BvhTraverseResult(
+                        true,
+                        instance_index,
+                        node.right_node_idx_or_prim_idx,
+                        probability,
+                        importance
+                    );
+
                     if(topLevel) {
                         instance_index = node.right_node_idx_or_prim_idx;
                         InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
