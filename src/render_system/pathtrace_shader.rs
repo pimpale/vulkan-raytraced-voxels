@@ -348,9 +348,6 @@ vulkano_shaders::shader! {
                 float total_importance = left_importance + right_importance;
                 float left_importance_normalized = left_importance / total_importance;
                 float right_importance_normalized = right_importance / total_importance;
-                
-                if(gl_GlobalInvocationID.x > push_constants.camera.screen_size.x/2)
-                    left_importance_normalized = 0.5;
 
                 if (total_importance == 0.0) {
                     return BvhTraverseResult(
@@ -405,9 +402,9 @@ vulkano_shaders::shader! {
 
         // returns a vector sampled from a triangle and projects it onto the unit sphere
         // equal area sampling
-        vec3 triangleSample(vec2 uv, vec3 orig, vec3 v0, vec3 v1, vec3 v2) {
+        vec3 triangleSample(vec2 uv, vec3 orig, vec3[3] tri) {
             vec3 bary = vec3(1.0 - uv.x - uv.y, uv.x, uv.y);
-            return normalize(bary.x * (v0-orig) + bary.y * (v1-orig) + bary.z * (v2-orig));
+            return normalize(bary.x * (tri[0]-orig) + bary.y * (tri[1]-orig) + bary.z * (tri[2]-orig));
         }
 
 
@@ -471,9 +468,9 @@ vulkano_shaders::shader! {
             float scatter_pdf_over_ray_pdf;
         };
 
-        BounceInfo doBounce(vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
+        BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
             if(info.miss) {
-                vec3 sky_emissivity = vec3(20.0);
+                vec3 sky_emissivity = vec3(0.0);
                 vec3 sky_reflectivity = vec3(0.0);
                 return BounceInfo(
                     sky_emissivity,
@@ -534,11 +531,6 @@ vulkano_shaders::shader! {
             vec3 emissivity = 100.0*tex1.rgb;
             float metallicity = tex2.r;
 
-            if(tex1.r > 0.0) {
-                emissivity = debugPrim(info.instance_index, info.prim_index);
-                reflectivity = vec3(0.0);
-            }
-
             // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
             float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
             if(scatter_kind_rand < metallicity) {
@@ -559,20 +551,53 @@ vulkano_shaders::shader! {
                 // lambertian scattering
                 reflectivity = reflectivity / M_PI;
 
-                // cosine weighted hemisphere sample
-                new_direction = alignedCosineWeightedSampleHemisphere(
-                    // random uv
-                    vec2(
-                        murmur3_finalizef(murmur3_combine(seed, 1)),
-                        murmur3_finalizef(murmur3_combine(seed, 2))
-                    ),
-                    // align it with the normal of the object we hit
-                    ics
-                );
+                // try traversing the bvh
+                BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 1));
+                if(result.success && bounce == 0) {
+                    // get the instance data for this instance
+                    InstanceData id_light = instance_data[result.instance_index];
+        
+                    Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
+                    Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
+                    Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
+        
+                    // triangle untransformed
+                    vec3[3] tri_light_r = vec3[3](
+                        v0_light.position,
+                        v1_light.position,
+                        v2_light.position
+                    );
+        
+                    // transform triangle
+                    vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
 
-                // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
-                // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
-                scatter_pdf_over_ray_pdf = 1.0;
+                    // sample a point on the light
+                    vec2 uv_light = vec2(
+                        murmur3_finalizef(murmur3_combine(seed, 2)),
+                        murmur3_finalizef(murmur3_combine(seed, 3))
+                    );
+                    new_direction = triangleSample(uv_light, new_origin, tri_light);
+
+                    scatter_pdf_over_ray_pdf = 1.0 / ( triangleRadiusSquared(tri_light));
+                } else {
+                    // cosine weighted hemisphere sample
+                    new_direction = alignedCosineWeightedSampleHemisphere(
+                        // random uv
+                        vec2(
+                            murmur3_finalizef(murmur3_combine(seed, 2)),
+                            murmur3_finalizef(murmur3_combine(seed, 3))
+                        ),
+                        // align it with the normal of the object we hit
+                        ics
+                    );
+    
+                    // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
+                    // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
+                    scatter_pdf_over_ray_pdf = 1.0;
+                    if(bounce == 0) {
+                        reflectivity = vec3(0.0);
+                    }
+                }
             }
 
             // compute data for this bounce
@@ -591,8 +616,8 @@ vulkano_shaders::shader! {
             return 2*vec2(screen)/vec2(screen_size) - 1.0;
         }
 
-        const uint SAMPLES_PER_PIXEL = 4;
-        const uint MAX_BOUNCES = 5;
+        const uint SAMPLES_PER_PIXEL = 1;
+        const uint MAX_BOUNCES = 2;
 
         void main() {
             Camera camera = push_constants.camera;
@@ -616,23 +641,19 @@ vulkano_shaders::shader! {
                 float aspect = float(camera.screen_size.x) / float(camera.screen_size.y);
 
                 vec3 origin = camera.eye;
-                vec2 jitter = vec2(
+                vec2 jitter = 0.0*vec2(
                     (1.0/camera.screen_size.x)*(murmur3_finalizef(murmur3_combine(sample_seed, 0))-0.5),
                     (1.0/camera.screen_size.y)*(murmur3_finalizef(murmur3_combine(sample_seed, 1))-0.5)
                 );
                 vec3 direction = normalize((uv.x + jitter.x) * camera.right * aspect + (uv.y + jitter.y) * camera.up + camera.front);
 
-                vec3 debug_color = vec3(0.0);
                 uint current_bounce;
                 for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
                     IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
-                    BounceInfo bounce_info = doBounce(origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
+                    BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
                     bounce_emissivity[current_bounce] = bounce_info.emissivity;
                     bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                     bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
-
-                    if (current_bounce == 0)
-                        debug_color += 0.5 * debugBvh(bounce_info.new_origin, bounce_info.ics.normal, sample_seed);
 
                     if(bounce_info.miss) {
                         current_bounce++;
@@ -648,7 +669,6 @@ vulkano_shaders::shader! {
                 for(int i = int(current_bounce)-1; i >= 0; i--) {
                     sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
                 }
-                color += debug_color;
                 color += sample_color;
             }
         
