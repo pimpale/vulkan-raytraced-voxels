@@ -105,9 +105,9 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
     // left face
     {
         let t = 0+off;
-        vertexes.push(Vertex3D::new2(v001, t+6, [0.0, 1.0]));
-        vertexes.push(Vertex3D::new2(v010, t+6, [1.0, 0.0]));
-        vertexes.push(Vertex3D::new2(v000, t+6, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v000, t, [1.0, 1.0]));
         vertexes.push(Vertex3D::new2(v011, t, [0.0, 0.0]));
         vertexes.push(Vertex3D::new2(v010, t, [1.0, 0.0]));
         vertexes.push(Vertex3D::new2(v001, t, [0.0, 1.0]));
@@ -119,9 +119,9 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
         vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
         vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
         vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
-        vertexes.push(Vertex3D::new2(v110, t+6, [0.0, 0.0]));
-        vertexes.push(Vertex3D::new2(v111, t+6, [1.0, 0.0]));
-        vertexes.push(Vertex3D::new2(v101, t+6, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v111, t, [1.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
     }
 
     // lower face

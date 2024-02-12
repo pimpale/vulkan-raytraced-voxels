@@ -121,15 +121,15 @@ vulkano_shaders::shader! {
             return dot(v, v);
         }
 
-        // returns true if any part of the triangle is visible from the point in the direction of the normal
+        // returns true if all parts of the triangle are visible from the point in the direction of the normal
         bool triangleIsVisible(vec3 point, vec3 normal, vec3[3] tri) {
             for(uint i = 0; i < 3; i++) {
                 vec3 to_v = tri[i] - point;
-                if(dot(to_v, normal) >= EPSILON_BLOCK) {
-                    return true;
+                if(dot(to_v, normal) < EPSILON_BLOCK) {
+                    return false;
                 }
             }
-            return false;
+            return true;
         }
 
         // returns true if the point is past the plane defined by the triangle
@@ -320,25 +320,24 @@ vulkano_shaders::shader! {
             uint instance_index = 0xFFFFFFFF;
             bool topLevel = true;
             while(true) {
-                if(node.left_node_idx == 0xFFFFFFFF) {
-                    if(topLevel) {
-                        instance_index = node.right_node_idx_or_prim_idx;
-                        InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
-                        transform = id.transform;
-                        topLevel = false;
-                        root = BvhNode(id.bvh_node_buffer_addr);
-                        node = root;
-                    } else {
-                        return BvhTraverseResult(
-                            true,
-                            instance_index,
-                            node.right_node_idx_or_prim_idx,
-                            probability,
-                            importance
-                        );
-                    }
+                if(topLevel && node.left_node_idx == 0xFFFFFFFF) {
+                    instance_index = node.right_node_idx_or_prim_idx;
+                    InstanceData id = instance_data[node.right_node_idx_or_prim_idx];
+                    transform = id.transform;
+                    topLevel = false;
+                    root = BvhNode(id.bvh_node_buffer_addr);
+                    node = root;
                 }
-            
+                if(!topLevel && node.left_node_idx == 0xFFFFFFFF) {
+                    return BvhTraverseResult(
+                        true,
+                        instance_index,
+                        node.right_node_idx_or_prim_idx,
+                        probability,
+                        importance
+                    );
+                }
+
                 // otherwise pick a child node
                 BvhNode left = root[node.left_node_idx];
                 BvhNode right = root[node.right_node_idx_or_prim_idx];
@@ -400,13 +399,12 @@ vulkano_shaders::shader! {
             return vec3(r * cos(phi), sqrt(z), r * sin(phi));
         }
 
-        // returns a vector sampled from a triangle and projects it onto the unit sphere
+        // returns a point sampled from a triangle
         // equal area sampling
         vec3 triangleSample(vec2 uv, vec3 orig, vec3[3] tri) {
             vec3 bary = vec3(1.0 - uv.x - uv.y, uv.x, uv.y);
-            return normalize(bary.x * (tri[0]-orig) + bary.y * (tri[1]-orig) + bary.z * (tri[2]-orig));
+            return bary.x * tri[0] + bary.y * tri[1] + bary.z * tri[2];
         }
-
 
         // returns a vector sampled from the hemisphere defined around the coordinate system defined by normal, tangent, and bitangent
         // normal, tangent and bitangent form a right handed coordinate system 
@@ -468,9 +466,155 @@ vulkano_shaders::shader! {
             float scatter_pdf_over_ray_pdf;
         };
 
-        BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
+        BounceInfo doBounce2(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
             if(info.miss) {
                 vec3 sky_emissivity = vec3(0.0);
+                vec3 sky_reflectivity = vec3(0.0);
+                return BounceInfo(
+                    sky_emissivity,
+                    sky_reflectivity,
+                    // miss, so the ray is done
+                    true,
+                    IntersectionCoordinateSystem(
+                        vec3(0.0),
+                        vec3(0.0),
+                        vec3(0.0)
+                    ),
+                    vec3(0.0),
+                    vec3(0.0),
+                    1.0
+                );
+            }
+
+
+            // get barycentric coordinates
+            vec3 bary3 = vec3(1.0 - info.bary.x - info.bary.y,  info.bary.x, info.bary.y);
+
+            // get the instance data for this instance
+            InstanceData id = instance_data[info.instance_index];
+
+            Vertex v0 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 0];
+            Vertex v1 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 1];
+            Vertex v2 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 2];
+
+            // triangle untransformed
+            vec3[3] tri_r = vec3[3](
+                v0.position,
+                v1.position,
+                v2.position
+            );
+
+            // transform triangle
+            vec3[3] tri = triangleTransform(id.transform, tri_r);
+
+            IntersectionCoordinateSystem ics = localCoordinateSystem(tri);
+
+            // get the texture coordinates
+            uint t = v0.t;
+            vec2 uv = v0.uv * bary3.x + v1.uv * bary3.y + v2.uv * bary3.z;
+
+
+            vec3 new_origin = tri[0] * bary3.x + tri[1] * bary3.y + tri[2] * bary3.z;
+            vec3 new_direction;
+
+            // fetch data
+            vec4 tex0 = texture(nonuniformEXT(sampler2D(tex[t*3+0], s)), uv).rgba;
+            vec4 tex1 = texture(nonuniformEXT(sampler2D(tex[t*3+1], s)), uv).rgba;
+            vec4 tex2 = texture(nonuniformEXT(sampler2D(tex[t*3+2], s)), uv).rgba;
+
+            float scatter_pdf_over_ray_pdf;
+
+            vec3 reflectivity = tex0.rgb;
+            float alpha = tex0.a;
+            vec3 emissivity = 500.0*tex1.rgb;
+            float metallicity = tex2.r;
+
+            // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
+            float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
+            if(scatter_kind_rand < metallicity) {
+                // mirror scattering
+                scatter_pdf_over_ray_pdf = 1.0;
+
+                new_direction = reflect(
+                    direction,
+                    ics.normal
+                );
+            } else if (scatter_kind_rand < metallicity + (1.0-alpha)) {
+                // transmissive scattering
+                scatter_pdf_over_ray_pdf = 1.0;
+
+                new_direction = direction;
+                reflectivity = vec3(1.0);
+            } else {
+                // lambertian scattering
+                reflectivity = reflectivity / M_PI;
+
+                // try traversing the bvh
+                BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 1));
+                if(result.success && gl_GlobalInvocationID.x > push_constants.camera.screen_size.x/2) {
+                    // get the instance data for this instance
+                    InstanceData id_light = instance_data[result.instance_index];
+        
+                    Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
+                    Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
+                    Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
+        
+                    // triangle untransformed
+                    vec3[3] tri_light_r = vec3[3](
+                        v0_light.position,
+                        v1_light.position,
+                        v2_light.position
+                    );
+        
+                    // transform triangle
+                    vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
+
+                    // sample a point on the light
+                    vec2 uv_light = vec2(
+                        murmur3_finalizef(murmur3_combine(seed, 2)),
+                        murmur3_finalizef(murmur3_combine(seed, 3))
+                    );
+
+                    vec3 sampled_light_point = triangleSample(uv_light, new_origin, tri_light);
+
+                    new_direction = normalize(sampled_light_point - new_origin);
+
+                    // cosine of the angle made between the surface normal and the new direction
+                    float cos_theta = dot(new_direction, ics.normal);
+
+                    // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
+                    float scatter_pdf = cos_theta / M_PI;
+
+                    float light_area = length(cross(tri_light[1] - tri_light[0], tri_light[2] - tri_light[0])) / 2.0; 
+                    float light_distance = length(sampled_light_point - new_origin);
+
+                    // what is the probability of picking this ray if we were picking a random point on the light?
+                    float ray_pdf = light_distance*light_distance/(cos_theta*light_area);
+
+                    scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
+                } else {
+                    // cosine weighted hemisphere sample
+                    new_direction = alignedCosineWeightedSampleHemisphere(
+                        // random uv
+                        vec2(
+                            murmur3_finalizef(murmur3_combine(seed, 2)),
+                            murmur3_finalizef(murmur3_combine(seed, 3))
+                        ),
+                        // align it with the normal of the object we hit
+                        ics
+                    );
+    
+                    // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
+                    // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
+                    scatter_pdf_over_ray_pdf = 1.0;
+                }
+            }
+        }
+
+
+        BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
+            if(info.miss) {
+                vec3 sky_emissivity = vec3(10.0);
                 vec3 sky_reflectivity = vec3(0.0);
                 return BounceInfo(
                     sky_emissivity,
@@ -553,7 +697,7 @@ vulkano_shaders::shader! {
 
                 // try traversing the bvh
                 BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 1));
-                if(result.success && bounce == 0) {
+                if(result.success) {
                     // get the instance data for this instance
                     InstanceData id_light = instance_data[result.instance_index];
         
@@ -576,47 +720,48 @@ vulkano_shaders::shader! {
                         murmur3_finalizef(murmur3_combine(seed, 2)),
                         murmur3_finalizef(murmur3_combine(seed, 3))
                     );
-                    new_direction = triangleSample(uv_light, new_origin, tri_light);
 
-                    scatter_pdf_over_ray_pdf = 1.0 / ( triangleRadiusSquared(tri_light));
-                } else {
-                    // cosine weighted hemisphere sample
-                    new_direction = alignedCosineWeightedSampleHemisphere(
-                        // random uv
-                        vec2(
-                            murmur3_finalizef(murmur3_combine(seed, 2)),
-                            murmur3_finalizef(murmur3_combine(seed, 3))
-                        ),
-                        // align it with the normal of the object we hit
-                        ics
-                    );
-    
-                    // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
-                    // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
+                    vec3 sampled_light_point = triangleSample(uv_light, new_origin, tri_light);
+
+                    new_direction = normalize(sampled_light_point - new_origin);
+
+                    emissivity = new_direction;
+
+                    // cosine of the angle made between the surface normal and the new direction
+                    float cos_theta = dot(new_direction, ics.normal);
+
+                    // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
+                    float scatter_pdf = cos_theta / M_PI;
+
+                    float light_area = length(cross(tri_light[1] - tri_light[0], tri_light[2] - tri_light[0])) / 2.0; 
+                    float light_distance = length(sampled_light_point - new_origin);
+
+                    // what is the probability of picking this ray if we were picking a random point on the light?
+                    float ray_pdf = light_distance*light_distance/(cos_theta*light_area);
+
                     scatter_pdf_over_ray_pdf = 1.0;
-                    if(bounce == 0) {
-                        reflectivity = vec3(0.0);
-                    }
+                } else {
+                    reflectivity = vec3(0.0);
                 }
             }
 
-            // compute data for this bounce
-            return BounceInfo(
-                emissivity,
-                reflectivity,
-                false,
-                ics,
-                new_origin,
-                new_direction,
-                scatter_pdf_over_ray_pdf
-            );
-        }
+        // compute data for this bounce
+        return BounceInfo(
+            emissivity,
+            reflectivity,
+            false,
+            ics,
+            new_origin,
+            new_direction,
+            scatter_pdf_over_ray_pdf
+        );
+    }
 
         vec2 screen_to_uv(uvec2 screen, uvec2 screen_size) {
             return 2*vec2(screen)/vec2(screen_size) - 1.0;
         }
 
-        const uint SAMPLES_PER_PIXEL = 1;
+        const uint SAMPLES_PER_PIXEL = 4;
         const uint MAX_BOUNCES = 2;
 
         void main() {

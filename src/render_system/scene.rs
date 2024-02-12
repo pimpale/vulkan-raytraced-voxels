@@ -280,8 +280,6 @@ where
                 bvh::build::build_tl_bvh(&isometries, &aabbs, &luminances, &instance_ids)
             };
 
-            dbg!(&light_tl_bvh);
-
             let light_tl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
@@ -445,8 +443,6 @@ impl SceneUploader {
         if prim_index_ids.len() > 0 {
             let (light_bl_bvh, light_aabb, luminance) =
                 bvh::build::build_bl_bvh(&prim_luminance_per_area, &prim_vertexes, &prim_index_ids);
-
-            dbg!(&light_bl_bvh);
 
             let light_bl_bvh_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
