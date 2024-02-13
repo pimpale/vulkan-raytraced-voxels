@@ -678,57 +678,64 @@ vulkano_shaders::shader! {
                 reflectivity = reflectivity / M_PI;
 
                 // try traversing the bvh
-                BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 1));
-                if(result.success) {
-                    // get the instance data for this instance
-                    InstanceData id_light = instance_data[result.instance_index];
-        
-                    Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
-                    Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
-                    Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
-        
-                    // triangle untransformed
-                    vec3[3] tri_light_r = vec3[3](
-                        v0_light.position,
-                        v1_light.position,
-                        v2_light.position
-                    );
-        
-                    // transform triangle
-                    vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
+                bool bvh_traverse_success = false;
+                if(murmur3_finalizef(murmur3_combine(seed, 2)) < 0.5) {
+                    BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
+                    if(result.success) {
+                        bvh_traverse_success = true;
 
-                    // sample a point on the light
-                    vec3 tuv_light = vec3(
-                        murmur3_finalizef(murmur3_combine(seed, 2)),
-                        murmur3_finalizef(murmur3_combine(seed, 3)),
-                        murmur3_finalizef(murmur3_combine(seed, 4))
-                    );
+                        // get the instance data for this instance
+                        InstanceData id_light = instance_data[result.instance_index];
+            
+                        Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
+                        Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
+                        Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
+            
+                        // triangle untransformed
+                        vec3[3] tri_light_r = vec3[3](
+                            v0_light.position,
+                            v1_light.position,
+                            v2_light.position
+                        );
+            
+                        // transform triangle
+                        vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
 
-                    VisibleTriangles vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
-                    vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
+                        // sample a point on the light
+                        vec3 tuv_light = vec3(
+                            murmur3_finalizef(murmur3_combine(seed, 3)),
+                            murmur3_finalizef(murmur3_combine(seed, 4)),
+                            murmur3_finalizef(murmur3_combine(seed, 5))
+                        );
 
-                    new_direction = normalize(sampled_light_point - new_origin);
+                        VisibleTriangles vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
+                        vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
 
-                    // cosine of the angle made between the surface normal and the new direction
-                    float cos_theta = dot(new_direction, ics.normal);
+                        new_direction = normalize(sampled_light_point - new_origin);
 
-                    // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
-                    float scatter_pdf = cos_theta / M_PI;
+                        // cosine of the angle made between the surface normal and the new direction
+                        float cos_theta = dot(new_direction, ics.normal);
 
-                    float light_area = getVisibleTriangleArea(vt);
-                    float light_distance = length(sampled_light_point - new_origin);
+                        // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
+                        float scatter_pdf = cos_theta / M_PI;
 
-                    // what is the probability of picking this ray if we were picking a random point on the light?
-                    float ray_pdf = light_distance*light_distance/(cos_theta*light_area);
+                        float light_area = getVisibleTriangleArea(vt);
+                        float light_distance = length(sampled_light_point - new_origin);
 
-                    scatter_pdf_over_ray_pdf = 10*scatter_pdf / ray_pdf;
-                } else {
+                        // what is the probability of picking this ray if we were picking a random point on the light?
+                        float ray_pdf = result.probability*light_distance*light_distance/(cos_theta*light_area);
+
+                        scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
+                    } 
+                }
+
+                if (!bvh_traverse_success) {
                     // cosine weighted hemisphere sample
                     new_direction = alignedCosineWeightedSampleHemisphere(
                         // random uv
                         vec2(
-                            murmur3_finalizef(murmur3_combine(seed, 2)),
-                            murmur3_finalizef(murmur3_combine(seed, 3))
+                            murmur3_finalizef(murmur3_combine(seed, 3)),
+                            murmur3_finalizef(murmur3_combine(seed, 4))
                         ),
                         // align it with the normal of the object we hit
                         ics
