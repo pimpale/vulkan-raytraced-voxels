@@ -257,26 +257,23 @@ pub fn build_bl_bvh(
         .map(|[v0, v1, v2]| Point3::from((v0.coords + v1.coords + v2.coords) / 3.0))
         .collect::<Vec<_>>();
 
-    let (prim_luminances, prim_aabb_luminances): (Vec<_>, Vec<_>) = prim_vertexes
+    let prim_aabb_luminances: Vec<_> = prim_vertexes
         .array_chunks()
         .zip(prim_luminance_per_area)
         .map(|([v0, v1, v2], lum)| {
             let normal = (v1 - v0).cross(&(v2 - v0));
             let area = normal.norm() / 2.0;
             let luminance = lum * area;
-            (
-                luminance,
-                [
-                    luminance * f32::max(-normal.x, 0.0),
-                    luminance * f32::max(normal.x, 0.0),
-                    luminance * f32::max(-normal.y, 0.0),
-                    luminance * f32::max(normal.y, 0.0),
-                    luminance * f32::max(-normal.z, 0.0),
-                    luminance * f32::max(normal.z, 0.0),
-                ],
-            )
+            [
+                luminance * f32::max(-normal.x, 0.0),
+                luminance * f32::max(normal.x, 0.0),
+                luminance * f32::max(-normal.y, 0.0),
+                luminance * f32::max(normal.y, 0.0),
+                luminance * f32::max(-normal.z, 0.0),
+                luminance * f32::max(normal.z, 0.0),
+            ]
         })
-        .unzip();
+        .collect();
 
     let mut nodes = vec![];
 
@@ -331,7 +328,7 @@ pub fn build_bl_bvh(
                     left_luminance_or_v2_1: v2.x,
                     right_luminance_or_v2_2: v2.y,
                     down_luminance_or_v2_3: v2.z,
-                    up_luminance_or_prim_luminance: prim_luminances[prim_idx],
+                    up_luminance_or_prim_luminance: prim_luminance_per_area[prim_idx],
                     ..Default::default()
                 }
             }

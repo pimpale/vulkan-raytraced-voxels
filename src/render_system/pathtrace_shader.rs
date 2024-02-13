@@ -121,15 +121,126 @@ vulkano_shaders::shader! {
             return dot(v, v);
         }
 
-        // returns true if all parts of the triangle are visible from the point in the direction of the normal
-        bool triangleIsVisible(vec3 point, vec3 normal, vec3[3] tri) {
-            for(uint i = 0; i < 3; i++) {
-                vec3 to_v = tri[i] - point;
-                if(dot(to_v, normal) < EPSILON_BLOCK) {
-                    return false;
-                }
+        struct VisibleTriangles {
+            uint num_visible;
+            vec3[3] tri0;
+            vec3[3] tri1;
+        };
+
+
+        vec3 line_plane_intersection(vec3 line_point, vec3 line_direction, vec3 plane_point, vec3 plane_normal) {
+            float t = dot(plane_normal, line_point - plane_point) / dot(-line_direction, plane_normal);
+            return line_point + t * line_direction;
+        }
+
+        // returns anywhere between 0 and 2 triangles, all of which are visible from the point in the direction of the normal
+        VisibleTriangles splitIntoVisibleTriangles(vec3 point, vec3 normal, vec3[3] tri) {
+            vec3[3] tri_sorted = tri;
+
+            // sort 3 vertices by cosine of angle between vertex and normal
+            float cos0 = dot(tri_sorted[0]-point, normal);
+            float cos1 = dot(tri_sorted[1]-point, normal);
+            float cos2 = dot(tri_sorted[2]-point, normal);
+
+            if(cos0 > cos2) {
+                vec3 tmp = tri_sorted[0];
+                tri_sorted[0] = tri_sorted[2];
+                tri_sorted[2] = tmp;
             }
-            return true;
+
+            if(cos0 > cos1) {
+                vec3 tmp = tri_sorted[0];
+                tri_sorted[0] = tri_sorted[1];
+                tri_sorted[1] = tmp;
+            }
+
+            if(cos1 > cos2) {
+                vec3 tmp = tri_sorted[1];
+                tri_sorted[1] = tri_sorted[2];
+                tri_sorted[2] = tmp;
+            }
+
+            vec3[3] null_tri = vec3[3](vec3(0.0), vec3(0.0), vec3(0.0));
+
+            if(dot(tri_sorted[2]-point, normal) <= 0) {
+                // none of the triangle's vertices are visible 
+                return VisibleTriangles(0, null_tri, null_tri);
+            } else if(dot(tri_sorted[1]-point, normal) <= 0) {
+                // only one of the triangle's vertices (vertex 2) is visible
+                // we can now construct a new triangle that is guaranteed to be visible by finding
+                // the intersection of v2->v1 with the normal plane (new_v0)
+                // and the intersection of v2->v0 with the normal plane (new_v1)
+
+                // for the line plane intersection test, we would normally need to check if the determinant of the matrix
+                // formed by the vectors is zero, but we know that the normal is not parallel to the plane, so we can skip that check
+
+                vec3[3] tri0 = vec3[3](
+                    line_plane_intersection(
+                        tri_sorted[2],
+                        tri_sorted[1] - tri_sorted[2],
+                        point,
+                        normal
+                    ),
+                    line_plane_intersection(
+                        tri_sorted[2],
+                        tri_sorted[0] - tri_sorted[2],
+                        point,
+                        normal
+                    ),
+                    tri_sorted[2]
+                );
+                return VisibleTriangles(1, tri0, null_tri);
+            } else if(dot(tri_sorted[0] - point, normal) <= 0) {
+                // two of the triangle's vertices are visible
+                
+                // in this case we have two visible triangles:
+                // the triangle formed by v2, v1, and the intersection of v2->v0 with the normal plane
+                // and the triangle formed by v2, the intersection of v2->v0 with the normal plane, and the intersection of v1->v0 with the normal plane
+                
+                vec3[3] tri0 = vec3[3](
+                    tri_sorted[2],
+                    tri_sorted[1],
+                    line_plane_intersection(
+                        tri_sorted[2],
+                        tri_sorted[0] - tri_sorted[2],
+                        point,
+                        normal
+                    )
+                );
+
+                vec3[3] tri1 = vec3[3](
+                    tri_sorted[2],
+                    line_plane_intersection(
+                        tri_sorted[2],
+                        tri_sorted[0] - tri_sorted[2],
+                        point,
+                        normal
+                    ),
+                    line_plane_intersection(
+                        tri_sorted[1],
+                        tri_sorted[0] - tri_sorted[1],
+                        point,
+                        normal
+                    )
+                );
+                
+                return VisibleTriangles(2, tri0, tri1);
+            } else {
+                // all of the triangle's vertices are visible
+                // so return the original triangle
+                return VisibleTriangles(1, tri, null_tri);
+            }
+        }
+
+        // returns the area of the triangle that is visible from the point in the direction of the normal
+        float getVisibleTriangleArea(VisibleTriangles vt) {
+            if(vt.num_visible == 1) {
+                return 0.5*length(cross(vt.tri0[1] - vt.tri0[0], vt.tri0[2] - vt.tri0[0]));
+            } else if(vt.num_visible == 2) {
+                return 0.5*length(cross(vt.tri0[1] - vt.tri0[0], vt.tri0[2] - vt.tri0[0])) + 0.5*length(cross(vt.tri1[1] - vt.tri1[0], vt.tri1[2] - vt.tri1[0]));
+            } else {
+                return 0.0;
+            }
         }
 
         // returns true if the point is past the plane defined by the triangle
@@ -273,21 +384,19 @@ vulkano_shaders::shader! {
                 // transformed triangle
                 vec3[3] tri = triangleTransform(transform, tri_r);
 
-                // check if the triangle is visible
-                if(!triangleIsVisible(point, normal, tri)) {
-                    return 0.0;
-                }
-
                 // check if the point is past the plane defined by the triangle
                 if(!pointIsVisibleFromTriangle(point, tri)) {
                     return 0.0;
                 }
 
+                VisibleTriangles vt = splitIntoVisibleTriangles(point, normal, tri);
+                float triangle_area = getVisibleTriangleArea(vt);
+
                 float min_distance_sq = triangleRadiusSquared(tri);
                 vec3 centroid_worldspace = triangleCenter(tri);
                 float true_distance_sq = lengthSquared(centroid_worldspace - point);
                 float distance_sq = max(true_distance_sq, min_distance_sq);
-                return node.up_luminance_or_prim_luminance / distance_sq;
+                return triangle_area*node.up_luminance_or_prim_luminance / distance_sq;
             }
         }
 
@@ -401,9 +510,28 @@ vulkano_shaders::shader! {
 
         // returns a point sampled from a triangle
         // equal area sampling
-        vec3 triangleSample(vec2 uv, vec3 orig, vec3[3] tri) {
+        vec3 triangleSample(vec2 uv, vec3[3] tri) {
+            if(uv.x + uv.y > 1.0) {
+                uv = vec2(1.0 - uv.x, 1.0 - uv.y);
+            }
             vec3 bary = vec3(1.0 - uv.x - uv.y, uv.x, uv.y);
             return bary.x * tri[0] + bary.y * tri[1] + bary.z * tri[2];
+        }
+
+        // there must be at least 1 visible triangle
+        vec3 visibleTriangleSample(vec3 tuv, VisibleTriangles vt) {
+            if(vt.num_visible == 1) {
+                return triangleSample(tuv.xy, vt.tri0);
+            } else {
+                float area1 = 0.5*length(cross(vt.tri0[1] - vt.tri0[0], vt.tri0[2] - vt.tri0[0]));
+                float area2 = 0.5*length(cross(vt.tri1[1] - vt.tri1[0], vt.tri1[2] - vt.tri1[0]));
+                float total_area = area1 + area2;
+                if(tuv.x < area1/total_area) {
+                    return triangleSample(tuv.yz, vt.tri0);
+                } else {
+                    return triangleSample(tuv.yz, vt.tri1);
+                }
+            }
         }
 
         // returns a vector sampled from the hemisphere defined around the coordinate system defined by normal, tangent, and bitangent
@@ -466,9 +594,9 @@ vulkano_shaders::shader! {
             float scatter_pdf_over_ray_pdf;
         };
 
-        BounceInfo doBounce2(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
+        BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
             if(info.miss) {
-                vec3 sky_emissivity = vec3(0.0);
+                vec3 sky_emissivity = vec3(20.0);
                 vec3 sky_reflectivity = vec3(0.0);
                 return BounceInfo(
                     sky_emissivity,
@@ -551,152 +679,6 @@ vulkano_shaders::shader! {
 
                 // try traversing the bvh
                 BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 1));
-                if(result.success && gl_GlobalInvocationID.x > push_constants.camera.screen_size.x/2) {
-                    // get the instance data for this instance
-                    InstanceData id_light = instance_data[result.instance_index];
-        
-                    Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
-                    Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
-                    Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
-        
-                    // triangle untransformed
-                    vec3[3] tri_light_r = vec3[3](
-                        v0_light.position,
-                        v1_light.position,
-                        v2_light.position
-                    );
-        
-                    // transform triangle
-                    vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
-
-                    // sample a point on the light
-                    vec2 uv_light = vec2(
-                        murmur3_finalizef(murmur3_combine(seed, 2)),
-                        murmur3_finalizef(murmur3_combine(seed, 3))
-                    );
-
-                    vec3 sampled_light_point = triangleSample(uv_light, new_origin, tri_light);
-
-                    new_direction = normalize(sampled_light_point - new_origin);
-
-                    // cosine of the angle made between the surface normal and the new direction
-                    float cos_theta = dot(new_direction, ics.normal);
-
-                    // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
-                    float scatter_pdf = cos_theta / M_PI;
-
-                    float light_area = length(cross(tri_light[1] - tri_light[0], tri_light[2] - tri_light[0])) / 2.0; 
-                    float light_distance = length(sampled_light_point - new_origin);
-
-                    // what is the probability of picking this ray if we were picking a random point on the light?
-                    float ray_pdf = light_distance*light_distance/(cos_theta*light_area);
-
-                    scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
-                } else {
-                    // cosine weighted hemisphere sample
-                    new_direction = alignedCosineWeightedSampleHemisphere(
-                        // random uv
-                        vec2(
-                            murmur3_finalizef(murmur3_combine(seed, 2)),
-                            murmur3_finalizef(murmur3_combine(seed, 3))
-                        ),
-                        // align it with the normal of the object we hit
-                        ics
-                    );
-    
-                    // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
-                    // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
-                    scatter_pdf_over_ray_pdf = 1.0;
-                }
-            }
-        }
-
-
-        BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
-            if(info.miss) {
-                vec3 sky_emissivity = vec3(10.0);
-                vec3 sky_reflectivity = vec3(0.0);
-                return BounceInfo(
-                    sky_emissivity,
-                    sky_reflectivity,
-                    // miss, so the ray is done
-                    true,
-                    IntersectionCoordinateSystem(
-                        vec3(0.0),
-                        vec3(0.0),
-                        vec3(0.0)
-                    ),
-                    vec3(0.0),
-                    vec3(0.0),
-                    1.0
-                );
-            }
-
-
-            // get barycentric coordinates
-            vec3 bary3 = vec3(1.0 - info.bary.x - info.bary.y,  info.bary.x, info.bary.y);
-
-            // get the instance data for this instance
-            InstanceData id = instance_data[info.instance_index];
-
-            Vertex v0 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 0];
-            Vertex v1 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 1];
-            Vertex v2 = Vertex(id.vertex_buffer_addr)[info.prim_index*3 + 2];
-
-            // triangle untransformed
-            vec3[3] tri_r = vec3[3](
-                v0.position,
-                v1.position,
-                v2.position
-            );
-
-            // transform triangle
-            vec3[3] tri = triangleTransform(id.transform, tri_r);
-
-            IntersectionCoordinateSystem ics = localCoordinateSystem(tri);
-
-            // get the texture coordinates
-            uint t = v0.t;
-            vec2 uv = v0.uv * bary3.x + v1.uv * bary3.y + v2.uv * bary3.z;
-
-
-            vec3 new_origin = tri[0] * bary3.x + tri[1] * bary3.y + tri[2] * bary3.z;
-            vec3 new_direction;
-
-            // fetch data
-            vec4 tex0 = texture(nonuniformEXT(sampler2D(tex[t*3+0], s)), uv).rgba;
-            vec4 tex1 = texture(nonuniformEXT(sampler2D(tex[t*3+1], s)), uv).rgba;
-            vec4 tex2 = texture(nonuniformEXT(sampler2D(tex[t*3+2], s)), uv).rgba;
-
-            float scatter_pdf_over_ray_pdf;
-
-            vec3 reflectivity = tex0.rgb;
-            float alpha = tex0.a;
-            vec3 emissivity = 100.0*tex1.rgb;
-            float metallicity = tex2.r;
-
-            // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
-            float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
-            if(scatter_kind_rand < metallicity) {
-                // mirror scattering
-                scatter_pdf_over_ray_pdf = 1.0;
-
-                new_direction = reflect(
-                    direction,
-                    ics.normal
-                );
-            } else if (scatter_kind_rand < metallicity + (1.0-alpha)) {
-                // transmissive scattering
-                scatter_pdf_over_ray_pdf = 1.0;
-
-                new_direction = direction;
-                reflectivity = vec3(1.0);
-            } else {
-                // lambertian scattering
-                reflectivity = reflectivity / M_PI;
-
-                // try traversing the bvh
-                BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 1));
                 if(result.success) {
                     // get the instance data for this instance
                     InstanceData id_light = instance_data[result.instance_index];
@@ -716,16 +698,16 @@ vulkano_shaders::shader! {
                     vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
 
                     // sample a point on the light
-                    vec2 uv_light = vec2(
+                    vec3 tuv_light = vec3(
                         murmur3_finalizef(murmur3_combine(seed, 2)),
-                        murmur3_finalizef(murmur3_combine(seed, 3))
+                        murmur3_finalizef(murmur3_combine(seed, 3)),
+                        murmur3_finalizef(murmur3_combine(seed, 4))
                     );
 
-                    vec3 sampled_light_point = triangleSample(uv_light, new_origin, tri_light);
+                    VisibleTriangles vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
+                    vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
 
                     new_direction = normalize(sampled_light_point - new_origin);
-
-                    emissivity = new_direction;
 
                     // cosine of the angle made between the surface normal and the new direction
                     float cos_theta = dot(new_direction, ics.normal);
@@ -733,15 +715,30 @@ vulkano_shaders::shader! {
                     // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
                     float scatter_pdf = cos_theta / M_PI;
 
-                    float light_area = length(cross(tri_light[1] - tri_light[0], tri_light[2] - tri_light[0])) / 2.0; 
+                    float light_area = getVisibleTriangleArea(vt);
                     float light_distance = length(sampled_light_point - new_origin);
 
                     // what is the probability of picking this ray if we were picking a random point on the light?
                     float ray_pdf = light_distance*light_distance/(cos_theta*light_area);
 
-                    scatter_pdf_over_ray_pdf = 1.0;
+                    scatter_pdf_over_ray_pdf = 10*scatter_pdf / ray_pdf;
                 } else {
-                    reflectivity = vec3(0.0);
+                    // cosine weighted hemisphere sample
+                    new_direction = alignedCosineWeightedSampleHemisphere(
+                        // random uv
+                        vec2(
+                            murmur3_finalizef(murmur3_combine(seed, 2)),
+                            murmur3_finalizef(murmur3_combine(seed, 3))
+                        ),
+                        // align it with the normal of the object we hit
+                        ics
+                    );
+    
+                    // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
+                    // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
+                    scatter_pdf_over_ray_pdf = 1.0;
+
+                    // reflectivity = vec3(0.0);
                 }
             }
 
@@ -757,70 +754,70 @@ vulkano_shaders::shader! {
         );
     }
 
-        vec2 screen_to_uv(uvec2 screen, uvec2 screen_size) {
-            return 2*vec2(screen)/vec2(screen_size) - 1.0;
+    vec2 screen_to_uv(uvec2 screen, uvec2 screen_size) {
+        return 2*vec2(screen)/vec2(screen_size) - 1.0;
+    }
+
+    const uint SAMPLES_PER_PIXEL = 4;
+    const uint MAX_BOUNCES = 2;
+
+    void main() {
+        Camera camera = push_constants.camera;
+        if(gl_GlobalInvocationID.x >= camera.screen_size.x || gl_GlobalInvocationID.y >= camera.screen_size.y) {
+            return;
         }
 
-        const uint SAMPLES_PER_PIXEL = 4;
-        const uint MAX_BOUNCES = 2;
+        uint pixel_seed = murmur3_combine(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
+        pixel_seed = murmur3_combine(pixel_seed, push_constants.frame);
 
-        void main() {
-            Camera camera = push_constants.camera;
-            if(gl_GlobalInvocationID.x >= camera.screen_size.x || gl_GlobalInvocationID.y >= camera.screen_size.y) {
-                return;
-            }
+        vec3 bounce_emissivity[MAX_BOUNCES];
+        vec3 bounce_reflectivity[MAX_BOUNCES];
+        float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
 
-            uint pixel_seed = murmur3_combine(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
-            pixel_seed = murmur3_combine(pixel_seed, push_constants.frame);
+        vec3 color = vec3(0.0);
+        for (uint sample_id = 0; sample_id < SAMPLES_PER_PIXEL; sample_id++) {
+            uint sample_seed = murmur3_combine(pixel_seed, sample_id);
 
-            vec3 bounce_emissivity[MAX_BOUNCES];
-            vec3 bounce_reflectivity[MAX_BOUNCES];
-            float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
+            // initial ray origin and direction
+            vec2 uv = screen_to_uv(gl_GlobalInvocationID.xy, camera.screen_size);
+            float aspect = float(camera.screen_size.x) / float(camera.screen_size.y);
 
-            vec3 color = vec3(0.0);
-            for (uint sample_id = 0; sample_id < SAMPLES_PER_PIXEL; sample_id++) {
-                uint sample_seed = murmur3_combine(pixel_seed, sample_id);
+            vec3 origin = camera.eye;
+            vec2 jitter = 0.0*vec2(
+                (1.0/camera.screen_size.x)*(murmur3_finalizef(murmur3_combine(sample_seed, 0))-0.5),
+                (1.0/camera.screen_size.y)*(murmur3_finalizef(murmur3_combine(sample_seed, 1))-0.5)
+            );
+            vec3 direction = normalize((uv.x + jitter.x) * camera.right * aspect + (uv.y + jitter.y) * camera.up + camera.front);
 
-                // initial ray origin and direction
-                vec2 uv = screen_to_uv(gl_GlobalInvocationID.xy, camera.screen_size);
-                float aspect = float(camera.screen_size.x) / float(camera.screen_size.y);
+            uint current_bounce;
+            for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
+                IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
+                BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
+                bounce_emissivity[current_bounce] = bounce_info.emissivity;
+                bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
+                bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
 
-                vec3 origin = camera.eye;
-                vec2 jitter = 0.0*vec2(
-                    (1.0/camera.screen_size.x)*(murmur3_finalizef(murmur3_combine(sample_seed, 0))-0.5),
-                    (1.0/camera.screen_size.y)*(murmur3_finalizef(murmur3_combine(sample_seed, 1))-0.5)
-                );
-                vec3 direction = normalize((uv.x + jitter.x) * camera.right * aspect + (uv.y + jitter.y) * camera.up + camera.front);
-
-                uint current_bounce;
-                for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
-                    IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
-                    BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
-                    bounce_emissivity[current_bounce] = bounce_info.emissivity;
-                    bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
-                    bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
-
-                    if(bounce_info.miss) {
-                        current_bounce++;
-                        break;
-                    }
-
-                    origin = bounce_info.new_origin;
-                    direction = bounce_info.new_direction;
+                if(bounce_info.miss) {
+                    current_bounce++;
+                    break;
                 }
-                
-                // compute the color for this sample
-                vec3 sample_color = vec3(0.0);
-                for(int i = int(current_bounce)-1; i >= 0; i--) {
-                    sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
-                }
-                color += sample_color;
-            }
-        
 
-            // average the samples
-            vec3 pixel_color = (1.0*color) / float(SAMPLES_PER_PIXEL);
-            out_color[gl_GlobalInvocationID.y*camera.screen_size.x + gl_GlobalInvocationID.x] = u8vec4(pixel_color.zyx*255, 255);
+                origin = bounce_info.new_origin;
+                direction = bounce_info.new_direction;
+            }
+            
+            // compute the color for this sample
+            vec3 sample_color = vec3(0.0);
+            for(int i = int(current_bounce)-1; i >= 0; i--) {
+                sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]); 
+            }
+            color += sample_color;
         }
+    
+
+        // average the samples
+        vec3 pixel_color = (1.0*color) / float(SAMPLES_PER_PIXEL);
+        out_color[gl_GlobalInvocationID.y*camera.screen_size.x + gl_GlobalInvocationID.x] = u8vec4(pixel_color.zyx*255, 255);
+    }
     ",
 }

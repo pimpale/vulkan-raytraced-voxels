@@ -116,9 +116,9 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
     // right face
     {
         let t = 1+off;
-        vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
-        vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
-        vertexes.push(Vertex3D::new2(v100, t, [0.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v110, t+6, [0.0, 0.0]));
+        vertexes.push(Vertex3D::new2(v101, t+6, [1.0, 1.0]));
+        vertexes.push(Vertex3D::new2(v100, t+6, [0.0, 1.0]));
         vertexes.push(Vertex3D::new2(v110, t, [0.0, 0.0]));
         vertexes.push(Vertex3D::new2(v111, t, [1.0, 0.0]));
         vertexes.push(Vertex3D::new2(v101, t, [1.0, 1.0]));
