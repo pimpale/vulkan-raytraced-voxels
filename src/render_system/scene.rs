@@ -47,7 +47,6 @@ struct Object {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TopLevelAccelerationStructureState {
     UpToDate,
-    NeedsUpdate,
     NeedsRebuild,
 }
 
@@ -143,7 +142,6 @@ where
                     &mut self.blas_command_buffer,
                     self.memory_allocator.clone(),
                     &[&vertex_buffer],
-                    isometry,
                 );
                 self.objects.insert(
                     key,
@@ -166,15 +164,8 @@ where
         match self.objects.get_mut(&key) {
             Some(Some(object)) => {
                 object.isometry = isometry;
-                // let blas = create_bottom_level_acceleration_structure(
-                //     &mut self.blas_command_buffer,
-                //     self.memory_allocator.clone(),
-                //     &[&object.vertex_buffer],
-                //     isometry,
-                // );
-                // object.blas = blas;
                 if self.cached_tlas_state == TopLevelAccelerationStructureState::UpToDate {
-                    self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
+                    self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsRebuild;
                 }
             }
             Some(None) => {}
@@ -337,7 +328,9 @@ where
                         .objects
                         .values()
                         .flatten()
-                        .map(|Object { blas, .. }| blas as &AccelerationStructure)
+                        .map(|Object { blas, isometry, .. }| {
+                            (blas as &AccelerationStructure, isometry)
+                        })
                         .collect::<Vec<_>>(),
                 );
 
@@ -517,11 +510,10 @@ impl SceneUploader {
             //     ))
             //     .unwrap();
 
-            let light_bl_bvh_dst_buffer =  Buffer::from_iter(
+            let light_bl_bvh_dst_buffer = Buffer::from_iter(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER
-                    | BufferUsage::SHADER_DEVICE_ADDRESS,
+                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
@@ -559,16 +551,20 @@ impl SceneUploader {
 fn create_top_level_acceleration_structure(
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     memory_allocator: Arc<dyn MemoryAllocator>,
-    bottom_level_acceleration_structures: &[&AccelerationStructure],
+    bottom_level_acceleration_structures: &[(&AccelerationStructure, &Isometry3<f32>)],
 ) -> Arc<AccelerationStructure> {
     let instances = bottom_level_acceleration_structures
         .iter()
         .map(
-            |&bottom_level_acceleration_structure| AccelerationStructureInstance {
+            |(bottom_level_acceleration_structure, &isometry)| AccelerationStructureInstance {
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(0, 0),
                 acceleration_structure_reference: bottom_level_acceleration_structure
                     .device_address()
                     .get(),
+                transform: {
+                    let isometry_matrix: [[f32; 4]; 4] = Matrix4::from(isometry).transpose().into();
+                    [isometry_matrix[0], isometry_matrix[1], isometry_matrix[2]]
+                },
                 ..Default::default()
             },
         )
@@ -625,7 +621,6 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
     builder: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     memory_allocator: Arc<dyn MemoryAllocator>,
     vertex_buffers: &[&Subbuffer<[T]>],
-    isometry: Isometry3<f32>,
 ) -> Arc<AccelerationStructure> {
     let description = T::per_vertex();
 
@@ -635,25 +630,6 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
     let mut max_primitive_counts = vec![];
     let mut build_range_infos = vec![];
 
-    let isometry_matrix: [[f32; 4]; 4] = Matrix4::from(isometry).transpose().into();
-
-    // create transform data
-    let transform_data = Buffer::from_data(
-        memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                | BufferUsage::SHADER_DEVICE_ADDRESS,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        [isometry_matrix[0], isometry_matrix[1], isometry_matrix[2]],
-    )
-    .unwrap();
-
     for &vertex_buffer in vertex_buffers {
         let primitive_count = vertex_buffer.len() as u32 / 3;
         triangles.push(AccelerationStructureGeometryTrianglesData {
@@ -662,7 +638,7 @@ fn create_bottom_level_acceleration_structure<T: BufferContents + vertex_input::
             vertex_stride: description.stride,
             max_vertex: vertex_buffer.len() as _,
             index_data: None,
-            transform_data: Some(transform_data.clone()),
+            transform_data: None,
             ..AccelerationStructureGeometryTrianglesData::new(
                 description.members.get("position").unwrap().format,
             )
