@@ -679,7 +679,7 @@ vulkano_shaders::shader! {
 
                 // try traversing the bvh
                 bool bvh_traverse_success = false;
-                if(murmur3_finalizef(murmur3_combine(seed, 2)) < 0.5) {
+                if(murmur3_finalizef(murmur3_combine(seed, 2)) < 0.99) {
                     BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
                     if(result.success) {
                         bvh_traverse_success = true;

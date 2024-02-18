@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt::Debug,
+    ops::Sub,
     sync::Arc,
 };
 
@@ -18,7 +19,7 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
+        CopyBufferInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
     },
     device::Queue,
     memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter},
@@ -165,13 +166,13 @@ where
         match self.objects.get_mut(&key) {
             Some(Some(object)) => {
                 object.isometry = isometry;
-                let blas = create_bottom_level_acceleration_structure(
-                    &mut self.blas_command_buffer,
-                    self.memory_allocator.clone(),
-                    &[&object.vertex_buffer],
-                    isometry,
-                );
-                object.blas = blas;
+                // let blas = create_bottom_level_acceleration_structure(
+                //     &mut self.blas_command_buffer,
+                //     self.memory_allocator.clone(),
+                //     &[&object.vertex_buffer],
+                //     isometry,
+                // );
+                // object.blas = blas;
                 if self.cached_tlas_state == TopLevelAccelerationStructureState::UpToDate {
                     self.cached_tlas_state = TopLevelAccelerationStructureState::NeedsUpdate;
                 }
@@ -245,6 +246,7 @@ where
                     .collect::<Vec<_>>(),
             )
             .unwrap();
+
             self.cached_instance_data = Some(instance_data);
 
             let ((isometries, aabbs), (luminances, instance_ids)): (
@@ -375,7 +377,9 @@ where
 
     pub fn uploader(&self) -> SceneUploader {
         SceneUploader {
+            command_buffer_allocator: self.command_buffer_allocator.clone(),
             memory_allocator: self.memory_allocator.clone(),
+            transfer_queue: self.transfer_queue.clone(),
             texture_luminances: self.texture_luminances.clone(),
         }
     }
@@ -394,7 +398,9 @@ pub enum SceneUploadedObjectHandle {
 
 #[derive(Clone)]
 pub struct SceneUploader {
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<dyn MemoryAllocator>,
+    transfer_queue: Arc<Queue>,
     texture_luminances: Vec<f32>,
 }
 
@@ -424,30 +430,98 @@ impl SceneUploader {
                 prim_index_ids.push(i as u32);
             }
         }
-        let vertex_buffer = Buffer::from_iter(
+
+        let vertex_dst_buffer: Subbuffer<[Vertex3D]> = Buffer::new_slice(
             self.memory_allocator.clone(),
             BufferCreateInfo {
                 usage: BufferUsage::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY
-                    | BufferUsage::SHADER_DEVICE_ADDRESS,
+                    | BufferUsage::SHADER_DEVICE_ADDRESS
+                    | BufferUsage::TRANSFER_DST,
                 ..Default::default()
             },
             AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+            vertexes.len() as u64,
+        )
+        .unwrap();
+
+        let vertex_src_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
             vertexes,
         )
         .unwrap();
 
-        if prim_index_ids.len() > 0 {
+        let mut transfer_command_buffer = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator.as_ref(),
+            self.transfer_queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        transfer_command_buffer
+            .copy_buffer(CopyBufferInfo::buffers(
+                vertex_src_buffer.clone(),
+                vertex_dst_buffer.clone(),
+            ))
+            .unwrap();
+
+        let (light_bl_bvh_buffer, luminance, light_aabb) = if prim_index_ids.len() > 0 {
             let (light_bl_bvh, light_aabb, luminance) =
                 bvh::build::build_bl_bvh(&prim_luminance_per_area, &prim_vertexes, &prim_index_ids);
 
-            let light_bl_bvh_buffer = Buffer::from_iter(
+            let light_bl_bvh_dst_buffer: Subbuffer<[BvhNode]> = Buffer::new_slice(
                 self.memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::SHADER_DEVICE_ADDRESS,
+                    usage: BufferUsage::TRANSFER_DST
+                        | BufferUsage::STORAGE_BUFFER
+                        | BufferUsage::SHADER_DEVICE_ADDRESS,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+                light_bl_bvh.len() as u64,
+            )
+            .unwrap();
+
+            // let light_bl_bvh_src_buffer = Buffer::from_iter(
+            //     self.memory_allocator.clone(),
+            //     BufferCreateInfo {
+            //         usage: BufferUsage::TRANSFER_SRC,
+            //         ..Default::default()
+            //     },
+            //     AllocationCreateInfo {
+            //         memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+            //             | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            //         ..Default::default()
+            //     },
+            //     light_bl_bvh,
+            // )
+            // .unwrap();
+
+            // transfer_command_buffer
+            //     .copy_buffer(CopyBufferInfo::buffers(
+            //         light_bl_bvh_src_buffer.clone(),
+            //         light_bl_bvh_dst_buffer.clone(),
+            //     ))
+            //     .unwrap();
+
+            let light_bl_bvh_dst_buffer =  Buffer::from_iter(
+                self.memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::STORAGE_BUFFER
+                    | BufferUsage::SHADER_DEVICE_ADDRESS,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
@@ -459,19 +533,25 @@ impl SceneUploader {
             )
             .unwrap();
 
-            SceneUploadedObjectHandle::Uploaded {
-                vertex_buffer,
-                light_bl_bvh_buffer: Some(light_bl_bvh_buffer),
-                luminance,
-                light_aabb,
-            }
+            (Some(light_bl_bvh_dst_buffer), luminance, light_aabb)
         } else {
-            SceneUploadedObjectHandle::Uploaded {
-                vertex_buffer,
-                light_bl_bvh_buffer: None,
-                luminance: [0.0; 6],
-                light_aabb: Aabb::Empty,
-            }
+            (None, [0.0; 6], Aabb::Empty)
+        };
+
+        transfer_command_buffer
+            .build()
+            .unwrap()
+            .execute(self.transfer_queue.clone())
+            .unwrap()
+            .then_signal_fence()
+            .wait(None)
+            .unwrap();
+
+        SceneUploadedObjectHandle::Uploaded {
+            vertex_buffer: vertex_dst_buffer,
+            light_bl_bvh_buffer: light_bl_bvh_buffer,
+            luminance,
+            light_aabb,
         }
     }
 }
