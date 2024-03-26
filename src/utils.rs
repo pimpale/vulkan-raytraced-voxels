@@ -91,11 +91,11 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
     let fz = loc[2] - 0.5 * dims[2];
 
     let v000 = [fx + 0.0, fy + 0.0, fz + 0.0];
-    let v100 = [fx + dims[0], fy + 0.0, fz + 0.0];
+    let v100 = [fx + dims[0]+5.0, fy + 0.0, fz + 0.0];
     let v001 = [fx + 0.0, fy + 0.0, fz + dims[2]];
     let v101 = [fx + dims[0], fy + 0.0, fz + dims[2]];
     let v010 = [fx + 0.0, fy + dims[1], fz + 0.0];
-    let v110 = [fx + dims[0], fy + dims[1]+5.0, fz + 0.0];
+    let v110 = [fx + dims[0], fy + dims[1], fz + 0.0];
     let v011 = [fx + 0.0, fy + dims[1], fz + dims[2]];
     let v111 = [fx + dims[0], fy + dims[1], fz + dims[2]];
 

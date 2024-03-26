@@ -146,18 +146,27 @@ vulkano_shaders::shader! {
             vec3 tmp = tri_sorted[0];
             tri_sorted[0] = tri_sorted[2];
             tri_sorted[2] = tmp;
+            float tmp2 = cos0;
+            cos0 = cos2;
+            cos2 = tmp2;
         }
 
         if(cos0 > cos1) {
             vec3 tmp = tri_sorted[0];
             tri_sorted[0] = tri_sorted[1];
             tri_sorted[1] = tmp;
+            float tmp2 = cos0;
+            cos0 = cos1;
+            cos1 = tmp2;
         }
 
         if(cos1 > cos2) {
             vec3 tmp = tri_sorted[1];
             tri_sorted[1] = tri_sorted[2];
             tri_sorted[2] = tmp;
+            float tmp2 = cos1;
+            cos1 = cos2;
+            cos2 = tmp2;
         }
 
         vec3[3] null_tri = vec3[3](vec3(0.0), vec3(0.0), vec3(0.0));
@@ -243,14 +252,6 @@ vulkano_shaders::shader! {
         }
     }
 
-    // returns true if the point is past the plane defined by the triangle
-    bool pointIsVisibleFromTriangle(vec3 point, vec3[3] tri) {
-        vec3 v0_1 = tri[1] - tri[0];
-        vec3 v0_2 = tri[2] - tri[0];
-        vec3 normal = cross(v0_1, v0_2);
-        return dot(point - tri[0], normal) >= 0.0;
-    }
-
     vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
         return vec3[3](
             transform * vec4(tri[0], 1.0),
@@ -263,8 +264,7 @@ vulkano_shaders::shader! {
         return (tri[0] + tri[1] + tri[2]) / 3.0;
     }
 
-    float triangleRadiusSquared(vec3[3] tri) {
-        vec3 center = triangleCenter(tri);
+    float triangleRadiusSquared(vec3 center, vec3[3] tri) {
         return max(
             max(
                 lengthSquared(tri[0] - center),
@@ -335,39 +335,61 @@ vulkano_shaders::shader! {
             
             vec3 lv = v000 - v100;
             luminance +=
-                node.left_luminance_or_v2_1 
-                * float(rectIsVisible(point, normal, vec3[4](v100, v101, v111, v110)))
-                * clamp(dot(point - v100, lv)/lengthSquared(lv), 0.0, 1.0);
+                // light contained in this part of the node
+                node.left_luminance_or_v2_1
+                // clamped scalar projection of point onto x axis (to reduce estimate if we are inside the node)
+                * clamp(dot(point - v100, lv)/lengthSquared(lv), 0.0, 1.0)
+                // very rough approximation of cos theta1
+                * float(rectIsVisible(point, normal, vec3[4](v100, v101, v111, v110)));
+                // // cos theta2
+                // * max(0.0, dot(normalize(point - v100), normalize(lv)));
 
             vec3 rv = v100 - v000;
             luminance +=
                 node.right_luminance_or_v2_2 
-                * float(rectIsVisible(point, normal, vec3[4](v000, v001, v011, v010)))
-                * clamp(dot(point - v000, rv)/lengthSquared(rv), 0.0, 1.0);                
+                * clamp(dot(point - v000, rv)/lengthSquared(rv), 0.0, 1.0)
+                // cos theta1
+                * float(rectIsVisible(point, normal, vec3[4](v000, v001, v011, v010)));
+                // // cos theta2
+                // * max(0.0, dot(normalize(point - v000), normalize(rv)));
             
             vec3 dv = v000 - v010;
             luminance +=
                 node.down_luminance_or_v2_3 
-                * float(rectIsVisible(point, normal, vec3[4](v010, v011, v111, v110)))
-                * clamp(dot(point - v010, dv)/lengthSquared(dv), 0.0, 1.0);
+                * clamp(dot(point - v010, dv)/lengthSquared(dv), 0.0, 1.0)
+                // cos theta1
+                * float(rectIsVisible(point, normal, vec3[4](v010, v011, v111, v110)));
+                // // cos theta2
+                // * max(0.0, dot(normalize(point - v010), normalize(dv)));
 
             vec3 uv = v010 - v000;                
             luminance +=
                 node.up_luminance_or_prim_luminance
-                * float(rectIsVisible(point, normal, vec3[4](v000, v001, v101, v100)))
-                * clamp(dot(point - v000, uv)/lengthSquared(uv), 0.0, 1.0);
+                * clamp(dot(point - v000, uv)/lengthSquared(uv), 0.0, 1.0)
+                // cos theta1
+                * float(rectIsVisible(point, normal, vec3[4](v000, v001, v101, v100)));
+                // // cos theta2
+                // * max(0.0, dot(normalize(point - v000), normalize(uv)));
 
             vec3 bv = v000 - v001;
             luminance +=
                 node.back_luminance
-                * float(rectIsVisible(point, normal, vec3[4](v001, v011, v111, v101)))
-                * clamp(dot(point - v001, bv)/lengthSquared(bv), 0.0, 1.0);
+                * clamp(dot(point - v001, bv)/lengthSquared(bv), 0.0, 1.0)
+                // cos theta1
+                * float(rectIsVisible(point, normal, vec3[4](v001, v011, v111, v101)));
+                // // cos theta2
+                // * max(0.0, dot(normalize(point - v001), normalize(bv)));
+
 
             vec3 fv = v001 - v000;
             luminance +=
                 node.front_luminance
-                * float(rectIsVisible(point, normal, vec3[4](v000, v010, v110, v100)))
-                * clamp(dot(point - v000, fv)/lengthSquared(fv), 0.0, 1.0);
+                * clamp(dot(point - v000, fv)/lengthSquared(fv), 0.0, 1.0)
+                // cos theta1
+                * float(rectIsVisible(point, normal, vec3[4](v000, v010, v110, v100)));
+                // // cos theta2
+                // * max(0.0, dot(normalize(point - v000), normalize(fv)));
+
 
             return luminance / distance_sq;
         } else {
@@ -381,22 +403,36 @@ vulkano_shaders::shader! {
                     node.down_luminance_or_v2_3
                 )
             );
-            // transformed triangle
+            // transformed triangle visible to us
             vec3[3] tri = triangleTransform(transform, tri_r);
-
-            // check if the point is past the plane defined by the triangle
-            if(!pointIsVisibleFromTriangle(point, tri)) {
+            VisibleTriangles vt = splitIntoVisibleTriangles(point, normal, tri);
+            if(vt.num_visible == 0) {
                 return 0.0;
             }
 
-            VisibleTriangles vt = splitIntoVisibleTriangles(point, normal, tri);
-            float triangle_area = getVisibleTriangleArea(vt);
+            vec3 tri_centroid = vt.num_visible == 1 
+                ? triangleCenter(vt.tri0)
+                : 0.5*(triangleCenter(vt.tri0) + triangleCenter(vt.tri1));
 
-            float min_distance_sq = triangleRadiusSquared(tri);
-            vec3 centroid_worldspace = triangleCenter(tri);
-            float true_distance_sq = lengthSquared(centroid_worldspace - point);
-            float distance_sq = max(true_distance_sq, min_distance_sq);
-            return triangle_area*node.up_luminance_or_prim_luminance / distance_sq;
+            vec3 tri_normal = normalize(cross(tri[1] - tri[0], tri[2] - tri[0]));
+
+            // get total luminance of the triangle
+            float emitted_light = getVisibleTriangleArea(vt)*node.up_luminance_or_prim_luminance;
+            
+            // https://en.wikipedia.org/wiki/View_factor
+            float dist_to_tri = length(point - tri_centroid);
+            float cos_theta_tri = dot(tri_normal, point-tri_centroid)/dist_to_tri;
+            float cost_theta_surf = dot(normal, tri_centroid-point)/dist_to_tri;
+            if (cost_theta_surf < 0.0 || cos_theta_tri < 0.0) {
+                return 0.0;
+            }
+
+            float min_distance_sq = triangleRadiusSquared(tri_centroid, tri);
+            float distance_sq = max(dist_to_tri*dist_to_tri, min_distance_sq);
+            
+            float visibility_coefficient = cos_theta_tri*cost_theta_surf;
+            
+            return emitted_light*visibility_coefficient / distance_sq;
         }
     }
 
@@ -418,7 +454,7 @@ vulkano_shaders::shader! {
                 false,
                 0,
                 0,
-                0.0,
+                1.0,
                 0.0
             );
         }
@@ -436,6 +472,9 @@ vulkano_shaders::shader! {
                 topLevel = false;
                 root = BvhNode(id.bvh_node_buffer_addr);
                 node = root;
+                if(importance == 0.0) {
+                    importance = nodeImportance(topLevel, point, normal, transform, node);
+                }
             }
             if(!topLevel && node.left_node_idx == 0xFFFFFFFF) {
                 return BvhTraverseResult(
@@ -462,7 +501,7 @@ vulkano_shaders::shader! {
                     false,
                     0,
                     0,
-                    0.0,
+                    probability,
                     0.0
                 );
             } else if(murmur3_finalizef(seed) < left_importance_normalized) {
@@ -682,59 +721,55 @@ vulkano_shaders::shader! {
             reflectivity = reflectivity / M_PI;
 
             // try traversing the bvh
-            bool bvh_traverse_success = false;
-            if(murmur3_finalizef(murmur3_combine(seed, 2)) < 2) {
-                BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
-                if(result.success) {
-                    bvh_traverse_success = true;
+            BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
+            if(false && result.success && result.importance > 0.0) {
+                // get the instance data for this instance
+                InstanceData id_light = instance_data[result.instance_index];
+    
+                Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
+                Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
+                Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
+    
+                // triangle untransformed
+                vec3[3] tri_light_r = vec3[3](
+                    v0_light.position,
+                    v1_light.position,
+                    v2_light.position
+                );
+    
+                // transform triangle
+                vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
 
-                    // get the instance data for this instance
-                    InstanceData id_light = instance_data[result.instance_index];
-        
-                    Vertex v0_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 0];
-                    Vertex v1_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 1];
-                    Vertex v2_light = Vertex(id_light.vertex_buffer_addr)[result.prim_index*3 + 2];
-        
-                    // triangle untransformed
-                    vec3[3] tri_light_r = vec3[3](
-                        v0_light.position,
-                        v1_light.position,
-                        v2_light.position
-                    );
-        
-                    // transform triangle
-                    vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
+                // sample a point on the light
+                vec3 tuv_light = vec3(
+                    murmur3_finalizef(murmur3_combine(seed, 3)),
+                    murmur3_finalizef(murmur3_combine(seed, 4)),
+                    murmur3_finalizef(murmur3_combine(seed, 5))
+                );
 
-                    // sample a point on the light
-                    vec3 tuv_light = vec3(
-                        murmur3_finalizef(murmur3_combine(seed, 3)),
-                        murmur3_finalizef(murmur3_combine(seed, 4)),
-                        murmur3_finalizef(murmur3_combine(seed, 5))
-                    );
+                VisibleTriangles vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
+                vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
 
-                    VisibleTriangles vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
-                    vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
+                new_direction = normalize(sampled_light_point - new_origin);
 
-                    new_direction = normalize(sampled_light_point - new_origin);
+                // cosine of the angle made between the surface normal and the new direction
+                float cos_theta = dot(new_direction, ics.normal);
 
-                    // cosine of the angle made between the surface normal and the new direction
-                    float cos_theta = dot(new_direction, ics.normal);
+                // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
+                float scatter_pdf = cos_theta / M_PI;
 
-                    // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
-                    float scatter_pdf = cos_theta / M_PI;
+                float light_area = getVisibleTriangleArea(vt);
+                float light_distance = length(sampled_light_point - new_origin);
 
-                    float light_area = getVisibleTriangleArea(vt);
-                    float light_distance = length(sampled_light_point - new_origin);
-
-                    // what is the probability of picking this ray if we were picking a random point on the light?
-                    float ray_pdf = result.probability*light_distance*light_distance/(cos_theta*light_area);
-                    debuginfo.x = light_area;
-
-                    scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
-                } 
-            }
-
-            if (!bvh_traverse_success) {
+                // what is the probability of picking this ray if we were picking a random point on the light?
+                float ray_pdf = result.probability*light_distance*light_distance/(cos_theta*light_area);
+                // debuginfo.x = light_area/2.0;
+                // debuginfo.y = vt.num_visible/2.0;
+                // debuginfo = normalize(sampled_light_point)/2.0 + vec3(0.5);
+                // debuginfo.x = -log(result.probability);
+                debuginfo.x = result.importance;
+                scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
+            } else {
                 // cosine weighted hemisphere sample
                 new_direction = alignedCosineWeightedSampleHemisphere(
                     // random uv
@@ -749,8 +784,6 @@ vulkano_shaders::shader! {
                 // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
                 // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
                 scatter_pdf_over_ray_pdf = 1.0;
-
-                // reflectivity = vec3(0.0);
             }
         }
 
@@ -771,7 +804,7 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 4;
+    const uint SAMPLES_PER_PIXEL = 32;
     const uint MAX_BOUNCES = 2;
 
     void main() {
@@ -827,9 +860,9 @@ vulkano_shaders::shader! {
             for(int i = int(current_bounce)-1; i >= 0; i--) {
                 sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]);
             }
-            if (current_bounce > 1) {
-                sample_color = bounce_debuginfo[1]/10.0;
-            }
+            // if (current_bounce > 1 && push_constants.frame % 100 > 500) {
+            //     sample_color = bounce_debuginfo[0];
+            // }
             color += sample_color;
         }
     
