@@ -252,6 +252,90 @@ vulkano_shaders::shader! {
         }
     }
 
+    // https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/ray-triangle-intersection-geometric-solution.html
+    bool rayTriangleIntersect(
+        vec3 orig, vec3 dir,
+        vec3 v0, vec3 v1, vec3 v2,
+        out float t
+    )
+    {
+        float kEpsilon = 0.000001;
+
+        // Compute the plane's normal
+        vec3 v0v1 = v1 - v0;
+        vec3 v0v2 = v2 - v0;
+        // No need to normalize
+        vec3 N = cross(v0v1, v0v2); // N
+        float area2 = length(N);
+    
+        // Step 1: Finding P
+        
+        // Check if the ray and plane are parallel
+        float NdotRayDirection = dot(N, dir);
+        if (abs(NdotRayDirection) < kEpsilon) // Almost 0
+            return false; // They are parallel, so they don't intersect!
+
+        // Compute d parameter using equation 2
+        float d = -dot(N, v0);
+        
+        // Compute t (equation 3)
+        t = -(dot(N, orig) + d) / NdotRayDirection;
+        
+        // Check if the triangle is behind the ray
+        if (t < 0) return false; // The triangle is behind
+    
+        // Compute the intersection point using equation 1
+        vec3 P = orig + t * dir;
+    
+        // Step 2: Inside-Outside Test
+        vec3 C; // Vector perpendicular to triangle's plane
+    
+        // Edge 0
+        vec3 edge0 = v1 - v0; 
+        vec3 vp0 = P - v0;
+        C = cross(edge0, vp0);
+        if (dot(N, C) < 0) return false; // P is on the right side
+    
+        // Edge 1
+        vec3 edge1 = v2 - v1; 
+        vec3 vp1 = P - v1;
+        C = cross(edge1, vp1);
+        if (dot(N, C) < 0) return false; // P is on the right side
+    
+        // Edge 2
+        vec3 edge2 = v0 - v2; 
+        vec3 vp2 = P - v2;
+        C = cross(edge2, vp2);
+        if (dot(N, C) < 0) return false; // P is on the right side
+
+        return true; // This ray hits the triangle
+    }
+
+    bool rayVisibleTriangleIntersect(
+        vec3 orig, vec3 dir,
+        VisibleTriangles vt,
+        out float t
+    ) {
+        if(vt.num_visible == 0) {
+            return false;
+        } else {
+            bool success = rayTriangleIntersect(
+                orig, dir,
+                vt.tri0[0], vt.tri0[1], vt.tri0[2],
+                t
+            );
+            if(!success && vt.num_visible == 2) {
+                return rayTriangleIntersect(
+                    orig, dir,
+                    vt.tri1[0], vt.tri1[1], vt.tri1[2],
+                    t
+                );
+            } else {
+                return success;
+            }
+        }
+    }
+
     vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
         return vec3[3](
             transform * vec4(tri[0], 1.0),
@@ -722,7 +806,21 @@ vulkano_shaders::shader! {
 
             // try traversing the bvh
             BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
-            if(false && result.success && result.importance > 0.0) {
+
+            // MIS weight for choosing the light
+            float light_pdf_mis_weight;
+            if(result.success && result.importance > 0.0) {
+                // we have a 50% chance of picking the light if our bvh traversal was successful
+                light_pdf_mis_weight = 0.5;
+            } else {
+                // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
+                light_pdf_mis_weight = 0.0;
+            }
+
+            // light sampling data that may or may not be valid
+            VisibleTriangles vt; // visible triangles struct
+
+            if(light_pdf_mis_weight > 0.0) {
                 // get the instance data for this instance
                 InstanceData id_light = instance_data[result.instance_index];
     
@@ -738,53 +836,63 @@ vulkano_shaders::shader! {
                 );
     
                 // transform triangle
-                vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);          
+                vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);
+                vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
+            }
 
+            // randomly choose whether or not to sample the light
+            float mis_rand = murmur3_finalizef(murmur3_combine(seed, 3));
+            if(mis_rand < light_pdf_mis_weight) {
                 // sample a point on the light
                 vec3 tuv_light = vec3(
-                    murmur3_finalizef(murmur3_combine(seed, 3)),
                     murmur3_finalizef(murmur3_combine(seed, 4)),
-                    murmur3_finalizef(murmur3_combine(seed, 5))
+                    murmur3_finalizef(murmur3_combine(seed, 5)),
+                    murmur3_finalizef(murmur3_combine(seed, 6))
                 );
-
-                VisibleTriangles vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
                 vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
 
+                debuginfo.x = 1.0;
                 new_direction = normalize(sampled_light_point - new_origin);
-
-                // cosine of the angle made between the surface normal and the new direction
-                float cos_theta = dot(new_direction, ics.normal);
-
-                // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
-                float scatter_pdf = cos_theta / M_PI;
-
-                float light_area = getVisibleTriangleArea(vt);
-                float light_distance = length(sampled_light_point - new_origin);
-
-                // what is the probability of picking this ray if we were picking a random point on the light?
-                float ray_pdf = result.probability*light_distance*light_distance/(cos_theta*light_area);
-                // debuginfo.x = light_area/2.0;
-                // debuginfo.y = vt.num_visible/2.0;
-                // debuginfo = normalize(sampled_light_point)/2.0 + vec3(0.5);
-                // debuginfo.x = -log(result.probability);
-                debuginfo.x = result.importance;
-                scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
             } else {
                 // cosine weighted hemisphere sample
                 new_direction = alignedCosineWeightedSampleHemisphere(
                     // random uv
                     vec2(
-                        murmur3_finalizef(murmur3_combine(seed, 3)),
-                        murmur3_finalizef(murmur3_combine(seed, 4))
+                        murmur3_finalizef(murmur3_combine(seed, 4)),
+                        murmur3_finalizef(murmur3_combine(seed, 5))
                     ),
                     // align it with the normal of the object we hit
                     ics
                 );
+            }         
 
-                // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
-                // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
-                scatter_pdf_over_ray_pdf = 1.0;
+            // cosine of the angle made between the surface normal and the new direction
+            float cos_theta = dot(new_direction, ics.normal);
+
+            // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
+            float scatter_pdf = cos_theta / M_PI;
+
+            // compute the ray pdf for the light
+            float ray_pdf_light = 0.0;
+            if(light_pdf_mis_weight > 0.0) {
+                float t;
+                if(rayVisibleTriangleIntersect(new_origin, new_direction, vt, t)) {
+                    vec3 sampled_light_point = new_origin + t*new_direction;
+                    float light_area = getVisibleTriangleArea(vt);
+                    float light_distance = length(sampled_light_point - new_origin);
+                    // what is the probability of picking this ray if we were picking a random point on the light?
+                    ray_pdf_light = light_distance*light_distance/(cos_theta*light_area);
+                }
             }
+            // compute the ray pdf for the cosine weighted hemisphere
+            // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
+            // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
+            float ray_pdf_hemisphere = cos_theta / M_PI;
+
+            // combine the two pdfs using MIS
+            float ray_pdf = light_pdf_mis_weight*ray_pdf_light + (1.0-light_pdf_mis_weight)*ray_pdf_hemisphere;
+
+            scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
         }
 
         // compute data for this bounce
@@ -860,7 +968,7 @@ vulkano_shaders::shader! {
             for(int i = int(current_bounce)-1; i >= 0; i--) {
                 sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]);
             }
-            // if (current_bounce > 1 && push_constants.frame % 100 > 500) {
+            // if (current_bounce > 1 && push_constants.frame % 100 > 50) {
             //     sample_color = bounce_debuginfo[0];
             // }
             color += sample_color;
