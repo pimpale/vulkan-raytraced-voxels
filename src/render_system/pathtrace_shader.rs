@@ -259,7 +259,7 @@ vulkano_shaders::shader! {
         out float t
     )
     {
-        float kEpsilon = 0.000001;
+        const float EPS = 0.0000001;
 
         // Compute the plane's normal
         vec3 v0v1 = v1 - v0;
@@ -272,7 +272,7 @@ vulkano_shaders::shader! {
         
         // Check if the ray and plane are parallel
         float NdotRayDirection = dot(N, dir);
-        if (abs(NdotRayDirection) < kEpsilon) // Almost 0
+        if (abs(NdotRayDirection) < EPS) // Almost 0
             return false; // They are parallel, so they don't intersect!
 
         // Compute d parameter using equation 2
@@ -515,7 +515,7 @@ vulkano_shaders::shader! {
             float distance_sq = max(dist_to_tri*dist_to_tri, min_distance_sq);
             
             float visibility_coefficient = cos_theta_tri*cost_theta_surf;
-            
+
             return emitted_light*visibility_coefficient / distance_sq;
         }
     }
@@ -781,7 +781,7 @@ vulkano_shaders::shader! {
 
         vec3 reflectivity = tex0.rgb;
         float alpha = tex0.a;
-        vec3 emissivity = 500.0*tex1.rgb;
+        vec3 emissivity = 1000.0*tex1.rgb;
         float metallicity = tex2.r;
 
         // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -810,7 +810,7 @@ vulkano_shaders::shader! {
             // MIS weight for choosing the light
             float light_pdf_mis_weight;
             if(result.success && result.importance > 0.0) {
-                // we have a 50% chance of picking the light if our bvh traversal was successful
+                // chance of picking the light if our bvh traversal was successful
                 light_pdf_mis_weight = 0.5;
             } else {
                 // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
@@ -851,7 +851,6 @@ vulkano_shaders::shader! {
                 );
                 vec3 sampled_light_point = visibleTriangleSample(tuv_light, vt);
 
-                debuginfo.x = 1.0;
                 new_direction = normalize(sampled_light_point - new_origin);
             } else {
                 // cosine weighted hemisphere sample
@@ -889,6 +888,16 @@ vulkano_shaders::shader! {
             // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
             float ray_pdf_hemisphere = cos_theta / M_PI;
 
+            // to compensate for variance, randomly choose whether to double or zero the scatter pdf
+            // if(!doMIS && result.success && result.importance > 0.0) {
+            //     if(murmur3_finalizef(murmur3_combine(seed, 7)) < 0.5) {
+            //         scatter_pdf *= 2.0;
+            //     } else {
+            //         scatter_pdf = 0.0;
+            //     }
+            // }
+                
+
             // combine the two pdfs using MIS
             float ray_pdf = light_pdf_mis_weight*ray_pdf_light + (1.0-light_pdf_mis_weight)*ray_pdf_hemisphere;
 
@@ -912,8 +921,8 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 32;
-    const uint MAX_BOUNCES = 2;
+    const uint SAMPLES_PER_PIXEL = 4;
+    const uint MAX_BOUNCES = 4;
 
     void main() {
         Camera camera = push_constants.camera;
@@ -928,7 +937,6 @@ vulkano_shaders::shader! {
         vec3 bounce_reflectivity[MAX_BOUNCES];
         float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
         vec3 bounce_debuginfo[MAX_BOUNCES];
-
 
         vec3 color = vec3(0.0);
         for (uint sample_id = 0; sample_id < SAMPLES_PER_PIXEL; sample_id++) {
