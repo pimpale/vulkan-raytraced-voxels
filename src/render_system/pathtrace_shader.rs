@@ -722,7 +722,7 @@ vulkano_shaders::shader! {
         vec3 debuginfo = vec3(0.0);
         
         if(info.miss) {
-            vec3 sky_emissivity = vec3(20.0);
+            vec3 sky_emissivity = vec3(5.0);
             vec3 sky_reflectivity = vec3(0.0);
             return BounceInfo(
                 sky_emissivity,
@@ -781,7 +781,7 @@ vulkano_shaders::shader! {
 
         vec3 reflectivity = tex0.rgb;
         float alpha = tex0.a;
-        vec3 emissivity = 1000.0*tex1.rgb;
+        vec3 emissivity = 1000.0*tex1.rgb * -dot(direction, ics.normal);
         float metallicity = tex2.r;
 
         // decide whether to do specular (0), transmissive (1), or lambertian (2) scattering
@@ -811,7 +811,7 @@ vulkano_shaders::shader! {
             float light_pdf_mis_weight;
             if(result.success && result.importance > 0.0) {
                 // chance of picking the light if our bvh traversal was successful
-                light_pdf_mis_weight = 0.5;
+                light_pdf_mis_weight = clamp(result.importance / 100.0, 0.0, 0.5);
             } else {
                 // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
                 light_pdf_mis_weight = 0.0;
@@ -896,7 +896,6 @@ vulkano_shaders::shader! {
             //         scatter_pdf = 0.0;
             //     }
             // }
-                
 
             // combine the two pdfs using MIS
             float ray_pdf = light_pdf_mis_weight*ray_pdf_light + (1.0-light_pdf_mis_weight)*ray_pdf_hemisphere;
@@ -921,7 +920,7 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 4;
+    const uint SAMPLES_PER_PIXEL = 2;
     const uint MAX_BOUNCES = 4;
 
     void main() {
@@ -947,7 +946,7 @@ vulkano_shaders::shader! {
             float aspect = float(camera.screen_size.x) / float(camera.screen_size.y);
 
             vec3 origin = camera.eye;
-            vec2 jitter = 0.0*vec2(
+            vec2 jitter = 0.01*vec2(
                 (1.0/camera.screen_size.x)*(murmur3_finalizef(murmur3_combine(sample_seed, 0))-0.5),
                 (1.0/camera.screen_size.y)*(murmur3_finalizef(murmur3_combine(sample_seed, 1))-0.5)
             );
