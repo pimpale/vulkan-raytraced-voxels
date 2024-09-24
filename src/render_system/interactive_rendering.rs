@@ -65,6 +65,7 @@ pub fn get_device_for_rendering_on(
         ray_query: true,
         shader_int8: true,
         shader_int64: true,
+        shader_float64: true,
         storage_buffer8_bit_access: true,
         runtime_descriptor_array: true,
         descriptor_binding_variable_descriptor_count: true,

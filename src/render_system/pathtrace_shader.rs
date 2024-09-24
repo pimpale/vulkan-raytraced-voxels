@@ -259,7 +259,9 @@ vulkano_shaders::shader! {
         out float t
     )
     {
-        const float EPS = 0.0000000001;
+        const float EPS = 0.0000001;
+        const float EPS2 = 0.0001;
+
 
         // Compute the plane's normal
         vec3 v0v1 = v1 - v0;
@@ -294,19 +296,19 @@ vulkano_shaders::shader! {
         vec3 edge0 = v1 - v0; 
         vec3 vp0 = P - v0;
         C = cross(edge0, vp0);
-        if (dot(N, C) < 0) return false; // P is on the right side
+        if (dot(N, C) < -EPS2) return false; // P is on the right side
     
         // Edge 1
         vec3 edge1 = v2 - v1; 
         vec3 vp1 = P - v1;
         C = cross(edge1, vp1);
-        if (dot(N, C) < 0) return false; // P is on the right side
+        if (dot(N, C) < -EPS2) return false; // P is on the right side
     
         // Edge 2
         vec3 edge2 = v0 - v2; 
         vec3 vp2 = P - v2;
         C = cross(edge2, vp2);
-        if (dot(N, C) < 0) return false; // P is on the right side
+        if (dot(N, C) < -EPS2) return false; // P is on the right side
 
         return true; // This ray hits the triangle
     }
@@ -678,7 +680,7 @@ vulkano_shaders::shader! {
         rayQueryInitializeEXT(
             ray_query,
             top_level_acceleration_structure,
-            gl_RayFlagsNoneEXT,//gl_RayFlagsCullBackFacingTrianglesEXT,
+            gl_RayFlagsCullBackFacingTrianglesEXT,
             0xFF,
             origin,
             t_min,
@@ -711,10 +713,8 @@ vulkano_shaders::shader! {
         vec3 emissivity;
         vec3 reflectivity;
         bool miss;
-        IntersectionCoordinateSystem ics;
         vec3 new_origin;
         vec3 new_direction;
-        float scatter_pdf_over_ray_pdf;
         vec3 debuginfo;
     };
 
@@ -729,14 +729,8 @@ vulkano_shaders::shader! {
                 sky_reflectivity,
                 // miss, so the ray is done
                 true,
-                IntersectionCoordinateSystem(
-                    vec3(0.0),
-                    vec3(0.0),
-                    vec3(0.0)
-                ),
                 vec3(0.0),
                 vec3(0.0),
-                1.0,
                 debuginfo
             );
         }
@@ -811,8 +805,7 @@ vulkano_shaders::shader! {
             float light_pdf_mis_weight;
             if(result.success && result.importance > 0.0) {
                 // chance of picking the light if our bvh traversal was successful
-                // light_pdf_mis_weight = clamp(result.importance / 100.0, 0.0, 0.5);
-                light_pdf_mis_weight = 1.0;
+                light_pdf_mis_weight = clamp(result.importance / 10.0, 0.0, 0.5);
             } else {
                 // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
                 light_pdf_mis_weight = 0.0;
@@ -884,8 +877,8 @@ vulkano_shaders::shader! {
                     ray_pdf_light = light_distance*light_distance/(cos_theta*light_area);
                 }
             }
-            
-            debuginfo.x = 1/ray_pdf_light;
+
+            // debuginfo.x = 1/ray_pdf_light;
 
             // compute the ray pdf for the cosine weighted hemisphere
             // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
@@ -910,12 +903,10 @@ vulkano_shaders::shader! {
         // compute data for this bounce
         return BounceInfo(
             emissivity,
-            reflectivity,
+            reflectivity * scatter_pdf_over_ray_pdf,
             false,
-            ics,
             new_origin,
             new_direction,
-            scatter_pdf_over_ray_pdf,
             debuginfo
         );
     }
@@ -938,7 +929,6 @@ vulkano_shaders::shader! {
 
         vec3 bounce_emissivity[MAX_BOUNCES];
         vec3 bounce_reflectivity[MAX_BOUNCES];
-        float bounce_scatter_pdf_over_ray_pdf[MAX_BOUNCES];
         vec3 bounce_debuginfo[MAX_BOUNCES];
 
         vec3 color = vec3(0.0);
@@ -962,7 +952,6 @@ vulkano_shaders::shader! {
                 BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
                 bounce_emissivity[current_bounce] = bounce_info.emissivity;
                 bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
-                bounce_scatter_pdf_over_ray_pdf[current_bounce] = bounce_info.scatter_pdf_over_ray_pdf;
                 bounce_debuginfo[current_bounce] = bounce_info.debuginfo;
 
                 if(bounce_info.miss) {
@@ -977,7 +966,7 @@ vulkano_shaders::shader! {
             // compute the color for this sample
             vec3 sample_color = vec3(0.0);
             for(int i = int(current_bounce)-1; i >= 0; i--) {
-                sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]);
+                sample_color = bounce_emissivity[i] + sample_color * bounce_reflectivity[i];
             }
             if (current_bounce > 1 && push_constants.frame % 100 > 50) {
                 sample_color = bounce_debuginfo[0];
