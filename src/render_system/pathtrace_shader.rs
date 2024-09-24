@@ -259,7 +259,7 @@ vulkano_shaders::shader! {
         out float t
     )
     {
-        const float EPS = 0.0000001;
+        const float EPS = 0.0000000001;
 
         // Compute the plane's normal
         vec3 v0v1 = v1 - v0;
@@ -399,7 +399,7 @@ vulkano_shaders::shader! {
             node = BvhNode(id.bvh_node_buffer_addr);
         }
         
-        if(topLevel || node.left_node_idx != 0xFFFFFFFF) {                
+        if(topLevel || node.left_node_idx != 0xFFFFFFFF) {
             // get corners
             vec3 v000 = transform * vec4(node.min_or_v0, 1.0);
             vec3 v111 = transform * vec4(node.max_or_v1, 1.0);
@@ -446,7 +446,7 @@ vulkano_shaders::shader! {
                 // // cos theta2
                 // * max(0.0, dot(normalize(point - v010), normalize(dv)));
 
-            vec3 uv = v010 - v000;                
+            vec3 uv = v010 - v000;
             luminance +=
                 node.up_luminance_or_prim_luminance
                 * clamp(dot(point - v000, uv)/lengthSquared(uv), 0.0, 1.0)
@@ -811,7 +811,8 @@ vulkano_shaders::shader! {
             float light_pdf_mis_weight;
             if(result.success && result.importance > 0.0) {
                 // chance of picking the light if our bvh traversal was successful
-                light_pdf_mis_weight = clamp(result.importance / 100.0, 0.0, 0.5);
+                // light_pdf_mis_weight = clamp(result.importance / 100.0, 0.0, 0.5);
+                light_pdf_mis_weight = 1.0;
             } else {
                 // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
                 light_pdf_mis_weight = 0.0;
@@ -883,6 +884,9 @@ vulkano_shaders::shader! {
                     ray_pdf_light = light_distance*light_distance/(cos_theta*light_area);
                 }
             }
+            
+            debuginfo.x = 1/ray_pdf_light;
+
             // compute the ray pdf for the cosine weighted hemisphere
             // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
             // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
@@ -920,8 +924,8 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 2;
-    const uint MAX_BOUNCES = 4;
+    const uint SAMPLES_PER_PIXEL = 4;
+    const uint MAX_BOUNCES = 2;
 
     void main() {
         Camera camera = push_constants.camera;
@@ -975,9 +979,9 @@ vulkano_shaders::shader! {
             for(int i = int(current_bounce)-1; i >= 0; i--) {
                 sample_color = bounce_emissivity[i] + (sample_color * bounce_reflectivity[i] * bounce_scatter_pdf_over_ray_pdf[i]);
             }
-            // if (current_bounce > 1 && push_constants.frame % 100 > 50) {
-            //     sample_color = bounce_debuginfo[0];
-            // }
+            if (current_bounce > 1 && push_constants.frame % 100 > 50) {
+                sample_color = bounce_debuginfo[0];
+            }
             color += sample_color;
         }
     

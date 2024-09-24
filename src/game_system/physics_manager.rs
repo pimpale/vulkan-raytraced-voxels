@@ -14,10 +14,10 @@ use rapier3d::dynamics::RigidBodyBuilder;
 use rapier3d::dynamics::RigidBodyHandle;
 use rapier3d::dynamics::RigidBodySet;
 use rapier3d::dynamics::RigidBodyType;
-use rapier3d::geometry::BroadPhase;
+use rapier3d::geometry::DefaultBroadPhase;
 use rapier3d::geometry::ColliderSet;
 use rapier3d::geometry::NarrowPhase;
-use rapier3d::parry::query::TOIStatus;
+use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::pipeline::PhysicsPipeline;
 use rapier3d::pipeline::QueryFilter;
 use rapier3d::pipeline::QueryPipeline;
@@ -42,7 +42,7 @@ struct InnerPhysicsManager {
     collider_set: ColliderSet,
     physics_pipeline: PhysicsPipeline,
     island_manager: IslandManager,
-    broad_phase: BroadPhase,
+    broad_phase: DefaultBroadPhase,
     narrow_phase: NarrowPhase,
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
@@ -60,7 +60,7 @@ impl InnerPhysicsManager {
             collider_set: ColliderSet::new(),
             physics_pipeline: PhysicsPipeline::new(),
             island_manager: IslandManager::new(),
-            broad_phase: BroadPhase::new(),
+            broad_phase: DefaultBroadPhase::new(),
             narrow_phase: NarrowPhase::new(),
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
@@ -173,11 +173,15 @@ impl InnerPhysicsManager {
             rigidbody.position(),
             &Vector3::new(0.0, -1.0, 0.0),
             collider.shape(),
-            max_distance,
-            true,
+            ShapeCastOptions {
+                max_time_of_impact: max_distance,
+                target_distance: 0.0,
+                stop_at_penetration: true,
+                compute_impact_geometry_on_penetration: false,
+            },
             QueryFilter::only_fixed(),
         ) {
-            (hit.toi, hit.status == TOIStatus::Penetrating)
+            (hit.time_of_impact, true)
         } else {
             (max_distance, false)
         }

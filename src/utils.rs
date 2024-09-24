@@ -91,9 +91,9 @@ pub fn cuboid(loc: Point3<f32>, dims: Vector3<f32>) -> Vec<Vertex3D> {
     let fz = loc[2] - 0.5 * dims[2];
 
     let v000 = [fx + 0.0, fy + 0.0, fz + 0.0];
-    let v100 = [fx + dims[0]+5.0, fy + 0.0, fz + 0.0];
+    let v100 = [fx + dims[0], fy + 0.0, fz + 0.0];
     let v001 = [fx + 0.0, fy + 0.0, fz + dims[2]];
-    let v101 = [fx + dims[0], fy + 0.0, fz + dims[2]];
+    let v101 = [fx + dims[0]+0.0, fy + 0.0, fz + dims[2]];
     let v010 = [fx + 0.0, fy + dims[1], fz + 0.0];
     let v110 = [fx + dims[0], fy + dims[1], fz + 0.0];
     let v011 = [fx + 0.0, fy + dims[1], fz + dims[2]];
@@ -177,8 +177,8 @@ pub fn unitcube() -> Vec<Vertex3D> {
 
 // get axis aligned bounding box
 pub fn get_aabb(obj: &[Vertex3D]) -> Vector3<f32> {
-    let mut min = Vector3::new(std::f32::MAX, std::f32::MAX, std::f32::MAX);
-    let mut max = Vector3::new(std::f32::MIN, std::f32::MIN, std::f32::MIN);
+    let mut min = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut max = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
     for v in obj.iter() {
         if v.position[0] < min[0] {
             min[0] = v.position[0];
@@ -211,7 +211,7 @@ pub fn get_aabb_hitbox(obj: &[Vertex3D]) -> Collider {
 pub fn get_normalized_mouse_coords(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
     let trackball_radius = extent[0].min(extent[1]) as f32;
     let center = Vector2::new(extent[0] as f32 / 2.0, extent[1] as f32 / 2.0);
-    return (e - center) / trackball_radius;
+    (e - center) / trackball_radius
 }
 
 pub fn screen_to_uv(e: Point2<f32>, extent: [u32; 2]) -> Point2<f32> {
