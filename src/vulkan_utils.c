@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL
 debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -298,12 +299,12 @@ void new_RayTracingEnabledDevice(              //
   // these are all the extensions that must be enabled for raytracing
   const uint32_t raytraceExtensionCount = 6;
   const char *ppRaytraceExtensionNames[] = {
-      VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
       VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
       VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
       VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
       VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
       VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+      VK_EXT_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
   };
 
   uint32_t allExtensionCount = enabledExtensionCount + raytraceExtensionCount;
