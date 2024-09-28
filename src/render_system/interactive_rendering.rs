@@ -44,7 +44,7 @@ use winit::window::Window;
 
 use super::{
     bvh::BvhNode,
-    pathtrace_shader,
+    raytrace_shader,
     vertex::{InstanceData, Vertex3D},
 };
 
@@ -216,7 +216,9 @@ pub struct Renderer {
     material_descriptor_set: Arc<PersistentDescriptorSet>,
     render_dests: Vec<Subbuffer<[u8]>>,
     swapchain_images: Vec<Arc<Image>>,
-    pipeline: Arc<ComputePipeline>,
+    raygen_pipeline: Arc<ComputePipeline>,
+    raytrace_pipeline: Arc<ComputePipeline>,
+    accumulate_pipeline: Arc<ComputePipeline>,
     wdd_needs_rebuild: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
     frame_count: u32,
@@ -309,8 +311,45 @@ impl Renderer {
 
         let (swapchain, swapchain_images) = create_swapchain(device.clone(), surface.clone());
 
-        let pipeline = {
-            let cs = pathtrace_shader::load(device.clone())
+        let raygen_pipeline = {
+            let cs = raytrace_shader::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+
+            let layout = {
+                let mut layout_create_info =
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
+
+                // Adjust the info for set 0, binding 1 to make it variable with texture_atlas.len() descriptors.
+                let binding = layout_create_info.set_layouts[0]
+                    .bindings
+                    .get_mut(&1)
+                    .unwrap();
+                binding.binding_flags |= DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
+                binding.descriptor_count = texture_atlas.len() as u32;
+
+                PipelineLayout::new(
+                    device.clone(),
+                    layout_create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap(),
+                )
+                .unwrap()
+            };
+
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
+
+        let raytrace_pipeline = {
+            let cs = raytrace_shader::load(device.clone())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
@@ -359,7 +398,7 @@ impl Renderer {
 
         let material_descriptor_set = PersistentDescriptorSet::new_variable(
             &descriptor_set_allocator,
-            pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            raytrace_pipeline.layout().set_layouts().get(0).unwrap().clone(),
             texture_atlas.len() as u32,
             [
                 WriteDescriptorSet::sampler(0, sampler),
@@ -376,7 +415,7 @@ impl Renderer {
             device,
             queue,
             swapchain,
-            pipeline,
+            raytrace_pipeline,
             descriptor_set_allocator,
             render_dests,
             swapchain_images,
@@ -461,7 +500,7 @@ impl Renderer {
 
         let per_frame_descriptor_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
-            self.pipeline.layout().set_layouts().get(1).unwrap().clone(),
+            self.raytrace_pipeline.layout().set_layouts().get(1).unwrap().clone(),
             [
                 WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
                 WriteDescriptorSet::buffer(1, instance_data),
@@ -472,12 +511,14 @@ impl Renderer {
         )
         .unwrap();
 
+
+
         builder
-            .bind_pipeline_compute(self.pipeline.clone())
+            .bind_pipeline_compute(self.raytrace_pipeline.clone())
             .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Compute,
-                self.pipeline.layout().clone(),
+                self.raytrace_pipeline.layout().clone(),
                 0,
                 (
                     self.material_descriptor_set.clone(),
@@ -486,10 +527,10 @@ impl Renderer {
             )
             .unwrap()
             .push_constants(
-                self.pipeline.layout().clone(),
+                self.raytrace_pipeline.layout().clone(),
                 0,
-                pathtrace_shader::PushConstants {
-                    camera: pathtrace_shader::Camera {
+                raytrace_shader::PushConstants {
+                    camera: raytrace_shader::Camera {
                         eye: eye.coords,
                         front,
                         right,

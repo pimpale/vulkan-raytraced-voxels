@@ -53,7 +53,9 @@ vulkano_shaders::shader! {
     };
 
     layout(set = 1, binding = 3, scalar) writeonly buffer Outputs {
-        u8vec4 out_color[];
+        vec3 emissivity[];
+        vec3 reflectivity[];
+        vec3 debug[];
     };
 
     struct Camera {
@@ -915,8 +917,7 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 4;
-    const uint MAX_BOUNCES = 2;
+    const uint MAX_BOUNCES = 8;
 
     void main() {
         Camera camera = push_constants.camera;
