@@ -1,5 +1,7 @@
 pub mod interactive_rendering;
 pub mod scene;
 pub mod vertex;
-mod raytrace_shader;
 pub mod bvh;
+mod raygen_shader;
+mod raytrace_shader;
+mod accumulate_shader;
