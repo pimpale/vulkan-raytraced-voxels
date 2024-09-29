@@ -18,7 +18,7 @@ vulkano_shaders::shader! {
     layout(set = 0, binding = 0) uniform sampler s;
     layout(set = 0, binding = 1) uniform texture2D tex[];
 
-    layout(set = 1, binding = 0) uniform accelerationStructureEXT top_level_acceleration_structure;
+    layout(set = 1, binding = 0) uniform accelerationStructureEXT tlas;
 
     layout(buffer_reference, buffer_reference_align=4, scalar) readonly buffer Vertex {
         vec3 position;
@@ -311,31 +311,6 @@ vulkano_shaders::shader! {
         if (dot(N, C) < -EPS2) return false; // P is on the right side
 
         return true; // This ray hits the triangle
-    }
-
-    bool rayVisibleTriangleIntersect(
-        vec3 orig, vec3 dir,
-        VisibleTriangles vt,
-        out float t
-    ) {
-        if(vt.num_visible == 0) {
-            return false;
-        } else {
-            bool success = rayTriangleIntersect(
-                orig, dir,
-                vt.tri0[0], vt.tri0[1], vt.tri0[2],
-                t
-            );
-            if(!success && vt.num_visible == 2) {
-                return rayTriangleIntersect(
-                    orig, dir,
-                    vt.tri1[0], vt.tri1[1], vt.tri1[2],
-                    t
-                );
-            } else {
-                return success;
-            }
-        }
     }
 
     vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
@@ -673,13 +648,13 @@ vulkano_shaders::shader! {
         vec2 bary;
     };
 
-    IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
+    IntersectionInfo getIntersectionInfo(accelerationStructureEXT tlas, vec3 origin, vec3 direction) {
         const float t_min = EPSILON_BLOCK;
         const float t_max = 1000.0;
         rayQueryEXT ray_query;
         rayQueryInitializeEXT(
             ray_query,
-            top_level_acceleration_structure,
+            tlas,
             gl_RayFlagsCullBackFacingTrianglesEXT,
             0xFF,
             origin,
@@ -718,7 +693,7 @@ vulkano_shaders::shader! {
         vec3 debuginfo;
     };
 
-    BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed) {
+    BounceInfo doBounce(uint bounce, vec3 origin, vec3 direction, IntersectionInfo info, uint seed, bool do_nee) {
         vec3 debuginfo = vec3(0.0);
         
         if(info.miss) {
@@ -799,11 +774,15 @@ vulkano_shaders::shader! {
             reflectivity = reflectivity / M_PI;
 
             // try traversing the bvh
-            BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
+            
+            BvhTraverseResult result;
+            if(do_nee) {
+                result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
+            }
 
             // MIS weight for choosing the light
             float light_pdf_mis_weight;
-            if(result.success && result.importance > 0.0) {
+            if(do_nee && result.success && result.importance > 0.0) {
                 // chance of picking the light if our bvh traversal was successful
                 light_pdf_mis_weight = clamp(result.importance / 10.0, 0.0, 0.5);
             } else {
@@ -812,6 +791,7 @@ vulkano_shaders::shader! {
             }
 
             // light sampling data that may or may not be valid
+            vec3[3] tri_light;
             VisibleTriangles vt; // visible triangles struct
 
             if(light_pdf_mis_weight > 0.0) {
@@ -830,7 +810,7 @@ vulkano_shaders::shader! {
                 );
     
                 // transform triangle
-                vec3[3] tri_light = triangleTransform(id_light.transform, tri_light_r);
+                tri_light = triangleTransform(id_light.transform, tri_light_r);
                 vt = splitIntoVisibleTriangles(new_origin, ics.normal, tri_light);
             }
 
@@ -869,7 +849,7 @@ vulkano_shaders::shader! {
             float ray_pdf_light = 0.0;
             if(light_pdf_mis_weight > 0.0) {
                 float t;
-                if(rayVisibleTriangleIntersect(new_origin, new_direction, vt, t)) {
+                if(rayTriangleIntersect(new_origin, new_direction, tri_light[0], tri_light[1], tri_light[2], t)) {
                     vec3 sampled_light_point = new_origin + t*new_direction;
                     float light_area = getVisibleTriangleArea(vt);
                     float light_distance = length(sampled_light_point - new_origin);
@@ -884,15 +864,6 @@ vulkano_shaders::shader! {
             // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
             // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
             float ray_pdf_hemisphere = cos_theta / M_PI;
-
-            // to compensate for variance, randomly choose whether to double or zero the scatter pdf
-            // if(!doMIS && result.success && result.importance > 0.0) {
-            //     if(murmur3_finalizef(murmur3_combine(seed, 7)) < 0.5) {
-            //         scatter_pdf *= 2.0;
-            //     } else {
-            //         scatter_pdf = 0.0;
-            //     }
-            // }
 
             // combine the two pdfs using MIS
             float ray_pdf = light_pdf_mis_weight*ray_pdf_light + (1.0-light_pdf_mis_weight)*ray_pdf_hemisphere;
@@ -916,7 +887,7 @@ vulkano_shaders::shader! {
     }
 
     const uint SAMPLES_PER_PIXEL = 4;
-    const uint MAX_BOUNCES = 2;
+    const uint MAX_BOUNCES = 4;
 
     void main() {
         Camera camera = push_constants.camera;
@@ -948,8 +919,8 @@ vulkano_shaders::shader! {
 
             uint current_bounce;
             for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
-                IntersectionInfo intersection_info = getIntersectionInfo(origin, direction);
-                BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce));
+                IntersectionInfo intersection_info = getIntersectionInfo(tlas, origin, direction);
+                BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce), current_bounce==0);
                 bounce_emissivity[current_bounce] = bounce_info.emissivity;
                 bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                 bounce_debuginfo[current_bounce] = bounce_info.debuginfo;
