@@ -1,18 +1,18 @@
 use core::panic;
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use image::{buffer, RgbaImage};
 use nalgebra::{Point3, Vector2, Vector3};
 use vulkano::{
     acceleration_structure::AccelerationStructure,
-    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
-        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        CopyBufferToImageInfo, PrimaryCommandBufferAbstract,
+        self, allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder,
+        CommandBufferUsage, CopyBufferToImageInfo, PrimaryCommandBufferAbstract,
     },
     descriptor_set::{
         allocator::StandardDescriptorSetAllocator, layout::DescriptorBindingFlags,
-        PersistentDescriptorSet, WriteDescriptorSet,
+        DescriptorBufferInfo, PersistentDescriptorSet, WriteDescriptorSet,
     },
     device::{
         physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, DeviceOwned,
@@ -43,8 +43,9 @@ use vulkano::{
 use winit::window::Window;
 
 use super::{
+    accumulate_shader,
     bvh::BvhNode,
-    raytrace_shader,
+    raygen_shader, raytrace_shader,
     vertex::{InstanceData, Vertex3D},
 };
 
@@ -173,26 +174,32 @@ fn create_swapchain(
 }
 
 /// This function is called once during initialization, then again whenever the window is resized.
-fn window_size_dependent_setup(
+fn window_size_dependent_setup<T: BufferContents>(
     memory_allocator: Arc<StandardMemoryAllocator>,
     images: &[Arc<Image>],
-) -> Vec<Subbuffer<[u8]>> {
+    transfer_src: bool,
+    channels: u32,
+) -> Vec<Subbuffer<[T]>> {
     let render_dests = images
         .iter()
         .map(|image| {
             let extent = image.extent();
 
-            Buffer::new_slice::<u8>(
+            Buffer::new_slice::<T>(
                 memory_allocator.clone(),
                 BufferCreateInfo {
-                    usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
+                    usage: if transfer_src {
+                        BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC
+                    } else {
+                        BufferUsage::STORAGE_BUFFER
+                    },
                     ..Default::default()
                 },
                 AllocationCreateInfo {
                     memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
                     ..Default::default()
                 },
-                (extent[0] * extent[1] * 4) as u64,
+                (extent[0] * extent[1] * channels) as u64,
             )
             .unwrap()
         })
@@ -206,6 +213,8 @@ pub fn get_surface_extent(surface: &Surface) -> [u32; 2] {
 }
 
 pub struct Renderer {
+    num_samples: u32,
+    num_bounces: u32,
     surface: Arc<Surface>,
     device: Arc<Device>,
     queue: Arc<Queue>,
@@ -214,7 +223,13 @@ pub struct Renderer {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     swapchain: Arc<Swapchain>,
     material_descriptor_set: Arc<PersistentDescriptorSet>,
-    render_dests: Vec<Subbuffer<[u8]>>,
+    bounce_origins: Vec<Subbuffer<[f32]>>,
+    bounce_directions: Vec<Subbuffer<[f32]>>,
+    bounce_emissivity: Vec<Subbuffer<[f32]>>,
+    bounce_reflectivity: Vec<Subbuffer<[f32]>>,
+    bounce_ray_pdf_over_scatter_pdf: Vec<Subbuffer<[f32]>>,
+    bounce_debug_info: Vec<Subbuffer<[f32]>>,
+    accumulate_target: Vec<Subbuffer<[u8]>>,
     swapchain_images: Vec<Arc<Image>>,
     raygen_pipeline: Arc<ComputePipeline>,
     raytrace_pipeline: Arc<ComputePipeline>,
@@ -348,6 +363,35 @@ impl Renderer {
             .unwrap()
         };
 
+        let raygen_pipeline = {
+            let cs = raygen_shader::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+
+            let layout = {
+                let layout_create_info =
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
+
+                PipelineLayout::new(
+                    device.clone(),
+                    layout_create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap(),
+                )
+                .unwrap()
+            };
+
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
+
         let raytrace_pipeline = {
             let cs = raytrace_shader::load(device.clone())
                 .unwrap()
@@ -385,7 +429,34 @@ impl Renderer {
             .unwrap()
         };
 
-        let render_dests = window_size_dependent_setup(memory_allocator.clone(), &swapchain_images);
+        let accumulate_pipeline = {
+            let cs = accumulate_shader::load(device.clone())
+                .unwrap()
+                .entry_point("main")
+                .unwrap();
+
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+
+            let layout = {
+                let layout_create_info =
+                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
+
+                PipelineLayout::new(
+                    device.clone(),
+                    layout_create_info
+                        .into_pipeline_layout_create_info(device.clone())
+                        .unwrap(),
+                )
+                .unwrap()
+            };
+
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
 
         let texture_atlas = load_textures(
             texture_atlas,
@@ -398,7 +469,12 @@ impl Renderer {
 
         let material_descriptor_set = PersistentDescriptorSet::new_variable(
             &descriptor_set_allocator,
-            raytrace_pipeline.layout().set_layouts().get(0).unwrap().clone(),
+            raytrace_pipeline
+                .layout()
+                .set_layouts()
+                .get(0)
+                .unwrap()
+                .clone(),
             texture_atlas.len() as u32,
             [
                 WriteDescriptorSet::sampler(0, sampler),
@@ -408,22 +484,38 @@ impl Renderer {
         )
         .unwrap();
 
-        Renderer {
+        let mut renderer = Renderer {
+            num_samples: 2,
+            num_bounces: 2,
             surface,
             command_buffer_allocator,
             previous_frame_end: Some(sync::now(device.clone()).boxed()),
             device,
             queue,
             swapchain,
+            raygen_pipeline,
             raytrace_pipeline,
+            accumulate_pipeline,
             descriptor_set_allocator,
-            render_dests,
             swapchain_images,
             memory_allocator,
             wdd_needs_rebuild: false,
             material_descriptor_set,
             frame_count: 0,
-        }
+            // buffers (to be created)
+            bounce_origins: vec![],
+            bounce_directions: vec![],
+            bounce_emissivity: vec![],
+            bounce_reflectivity: vec![],
+            bounce_ray_pdf_over_scatter_pdf: vec![],
+            bounce_debug_info: vec![],
+            accumulate_target: vec![],
+        };
+
+        // create buffers
+        renderer.create_buffers();
+
+        renderer
     }
 
     pub fn n_swapchain_images(&self) -> usize {
@@ -440,8 +532,53 @@ impl Renderer {
             .expect("failed to recreate swapchain");
 
         self.swapchain = new_swapchain;
-        self.render_dests = window_size_dependent_setup(self.memory_allocator.clone(), &new_images);
         self.swapchain_images = new_images;
+        self.create_buffers();
+    }
+
+    pub fn create_buffers(&mut self) {
+        self.bounce_origins = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            4 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_directions = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            4 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_emissivity = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            4 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_reflectivity = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            4 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_ray_pdf_over_scatter_pdf = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            1 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_debug_info = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            4 * self.num_bounces * self.num_samples,
+        );
+        self.accumulate_target = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            4,
+        );
     }
 
     pub fn render(
@@ -498,54 +635,225 @@ impl Renderer {
         )
         .unwrap();
 
-        let per_frame_descriptor_set = PersistentDescriptorSet::new(
-            &self.descriptor_set_allocator,
-            self.raytrace_pipeline.layout().set_layouts().get(1).unwrap().clone(),
-            [
-                WriteDescriptorSet::acceleration_structure(0, top_level_acceleration_structure),
-                WriteDescriptorSet::buffer(1, instance_data),
-                // WriteDescriptorSet::buffer(2, luminance_bvh),
-                WriteDescriptorSet::buffer(3, self.render_dests[image_index as usize].clone()),
-            ],
-            [],
-        )
-        .unwrap();
-
-
-
         builder
-            .bind_pipeline_compute(self.raytrace_pipeline.clone())
+            .bind_pipeline_compute(self.raygen_pipeline.clone())
             .unwrap()
-            .bind_descriptor_sets(
+            .push_descriptor_set(
                 PipelineBindPoint::Compute,
-                self.raytrace_pipeline.layout().clone(),
+                self.raygen_pipeline.layout().clone(),
                 0,
-                (
-                    self.material_descriptor_set.clone(),
-                    per_frame_descriptor_set,
-                ),
+                vec![
+                    WriteDescriptorSet::buffer(
+                        0,
+                        self.bounce_origins[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        1,
+                        self.bounce_directions[image_index as usize].clone(),
+                    ),
+                ]
+                .into(),
             )
             .unwrap()
             .push_constants(
                 self.raytrace_pipeline.layout().clone(),
                 0,
-                raytrace_shader::PushConstants {
-                    camera: raytrace_shader::Camera {
+                raygen_shader::PushConstants {
+                    camera: raygen_shader::Camera {
                         eye: eye.coords,
                         front,
                         right,
                         up,
                         screen_size: [extent[0], extent[1]].into(),
                     },
-                    frame: self.frame_count,
-                    tl_bvh_addr: luminance_bvh.device_address().unwrap().get(),
+                    frame_seed: self.frame_count,
+                },
+            )
+            .unwrap()
+            .dispatch([extent[0] / 32 + 1, extent[1] / 32 + 1, self.num_samples])
+            .unwrap();
+
+        // bind raytrace pipeline
+        builder
+            .bind_pipeline_compute(self.raytrace_pipeline.clone())
+            .unwrap()
+            // bind material descriptor set
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.raytrace_pipeline.layout().clone(),
+                0,
+                self.material_descriptor_set.clone(),
+            )
+            .unwrap();
+
+        // dispatch raytrace pipeline
+        for bounce in 0..self.num_bounces {
+            let sect_sz =
+                (size_of::<f32>() as u32 * self.num_samples * extent[0] * extent[1]) as u64;
+            let b = bounce as u64;
+
+            builder
+                .push_descriptor_set(
+                    PipelineBindPoint::Compute,
+                    self.raytrace_pipeline.layout().clone(),
+                    1,
+                    vec![
+                        WriteDescriptorSet::acceleration_structure(
+                            0,
+                            top_level_acceleration_structure.clone(),
+                        ),
+                        WriteDescriptorSet::buffer(1, instance_data.clone()),
+                        // input ray origin
+                        WriteDescriptorSet::buffer_with_range(
+                            2,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_origins[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                            },
+                        ),
+                        // input ray direction
+                        WriteDescriptorSet::buffer_with_range(
+                            3,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_directions[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                            },
+                        ),
+                        // output ray origin
+                        WriteDescriptorSet::buffer_with_range(
+                            4,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_origins[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: (b + 1) * 4 * sect_sz..(b + 2) * 4 * sect_sz,
+                            },
+                        ),
+                        // output ray direction
+                        WriteDescriptorSet::buffer_with_range(
+                            5,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_directions[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: (b + 1) * 4 * sect_sz..(b + 2) * 4 * sect_sz,
+                            },
+                        ),
+                        WriteDescriptorSet::buffer_with_range(
+                            6,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_emissivity[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                            },
+                        ),
+                        WriteDescriptorSet::buffer_with_range(
+                            7,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_reflectivity[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                            },
+                        ),
+                        WriteDescriptorSet::buffer_with_range(
+                            8,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_ray_pdf_over_scatter_pdf[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * sect_sz..(b + 1) * sect_sz,
+                            },
+                        ),
+                        WriteDescriptorSet::buffer_with_range(
+                            9,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_debug_info[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                            },
+                        ),
+                    ]
+                    .into(),
+                )
+                .unwrap()
+                .push_constants(
+                    self.raytrace_pipeline.layout().clone(),
+                    0,
+                    raytrace_shader::PushConstants {
+                        xsize: extent[0],
+                        ysize: extent[1],
+                        bounce_seed: self.frame_count * self.num_bounces + bounce,
+                        tl_bvh_addr: luminance_bvh.device_address().unwrap().get(),
+                    },
+                )
+                .unwrap()
+                .dispatch([extent[0] / 32 + 1, extent[1] / 32 + 1, self.num_samples])
+                .unwrap();
+        }
+
+        // accumulate samples and bounces and write to swapchain image
+        builder
+            .bind_pipeline_compute(self.accumulate_pipeline.clone())
+            .unwrap()
+            .push_descriptor_set(
+                PipelineBindPoint::Compute,
+                self.accumulate_pipeline.layout().clone(),
+                0,
+                vec![
+                    WriteDescriptorSet::buffer(
+                        0,
+                        self.bounce_origins[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        1,
+                        self.bounce_directions[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        2,
+                        self.bounce_emissivity[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        3,
+                        self.bounce_reflectivity[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        4,
+                        self.bounce_ray_pdf_over_scatter_pdf[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        5,
+                        self.bounce_debug_info[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        6,
+                        self.accumulate_target[image_index as usize].clone(),
+                    ),
+                ]
+                .into(),
+            )
+            .unwrap()
+            .push_constants(
+                self.accumulate_pipeline.layout().clone(),
+                0,
+                accumulate_shader::PushConstants {
+                    num_samples: self.num_samples,
+                    num_bounces: self.num_bounces,
+                    xsize: extent[0],
+                    ysize: extent[1],
                 },
             )
             .unwrap()
             .dispatch([extent[0] / 32 + 1, extent[1] / 32 + 1, 1])
             .unwrap()
             .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
-                self.render_dests[image_index as usize].clone(),
+                self.accumulate_target[image_index as usize].clone(),
                 self.swapchain_images[image_index as usize].clone(),
             ))
             .unwrap();

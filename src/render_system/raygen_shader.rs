@@ -4,16 +4,14 @@ vulkano_shaders::shader! {
     src: r"
 #version 460
 #extension GL_EXT_scalar_block_layout: require
-#extension GL_EXT_shader_explicit_arithmetic_types_int64: require
 
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
-
-layout(set = 1, binding = 4) writeonly buffer OutputsOrigin {
+layout(set = 0, binding = 0) writeonly buffer OutputsOrigin {
     vec3 output_origin[];
 };
 
-layout(set = 1, binding = 5) writeonly buffer OutputsDirection {
+layout(set = 0, binding = 1) writeonly buffer OutputsDirection {
     vec3 output_direction[];
 };
 
@@ -28,8 +26,6 @@ struct Camera {
 layout(push_constant, scalar) uniform PushConstants {
     Camera camera;
     uint frame_seed;
-    uint num_samples;
-    uint64_t tl_bvh_addr;
 } push_constants;
 
 
@@ -91,10 +87,9 @@ void main() {
 
     const uint xsize = camera.screen_size.x;
     const uint ysize = camera.screen_size.y;
-    const uint num_samples = push_constants.num_samples;
 
     // tensor layout: [bounce, sample, y, x, channel]
-    const uint bid = 0                  * num_samples * ysize * xsize 
+    const uint bid =
             + gl_GlobalInvocationID.z   * ysize * xsize 
             + gl_GlobalInvocationID.y   * xsize 
             + gl_GlobalInvocationID.x; 

@@ -85,9 +85,7 @@ layout(set = 1, binding = 9) writeonly buffer OutputsDebugInfo {
 
 
 layout(push_constant, scalar) uniform PushConstants {
-    uint frame_seed;
-    uint bounce;
-    uint num_samples;
+    uint bounce_seed;
     uint xsize;
     uint ysize;
     uint64_t tl_bvh_addr;
@@ -734,19 +732,19 @@ IntersectionInfo getIntersectionInfo(vec3 origin, vec3 direction) {
 
 void main() {
     // return early if we are out of bounds
-    if(gl_GlobalInvocationID.x >= xsize || gl_GlobalInvocationID.y >= ysize || gl_GlobalInvocationID.z >= num_samples) {
+    if(gl_GlobalInvocationID.x >= xsize || gl_GlobalInvocationID.y >= ysize) {
         return;
     }
     
-    // tensor layout: [bounce, sample, y, x, channel]
-    const uint bid = bounce             * num_samples * ysize * xsize 
+    // tensor layout: [sample, y, x, channel]
+    const uint bid =  
             + gl_GlobalInvocationID.z   * ysize * xsize 
             + gl_GlobalInvocationID.y   * xsize 
             + gl_GlobalInvocationID.x; 
             
     const vec3 origin = input_origin[bid];
     const vec3 direction = input_direction[bid];
-    const uint seed = murmur3_combine(frame_seed, bid);
+    const uint seed = murmur3_combine(bounce_seed, bid);
 
     // return early from terminal samples (ray direction is 0, 0, 0)
     if(length(direction) == 0.0) {
