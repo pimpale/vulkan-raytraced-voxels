@@ -920,7 +920,7 @@ vulkano_shaders::shader! {
             uint current_bounce;
             for (current_bounce = 0; current_bounce < MAX_BOUNCES; current_bounce++) {
                 IntersectionInfo intersection_info = getIntersectionInfo(tlas, origin, direction);
-                BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce), current_bounce==0);
+                BounceInfo bounce_info = doBounce(current_bounce, origin, direction, intersection_info, murmur3_combine(sample_seed, current_bounce), true);
                 bounce_emissivity[current_bounce] = bounce_info.emissivity;
                 bounce_reflectivity[current_bounce] = bounce_info.reflectivity;
                 bounce_debuginfo[current_bounce] = bounce_info.debuginfo;
