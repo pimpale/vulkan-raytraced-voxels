@@ -11,7 +11,8 @@ use vulkano::{
         CommandBufferUsage, CopyBufferToImageInfo, PrimaryCommandBufferAbstract,
     },
     descriptor_set::{
-        allocator::StandardDescriptorSetAllocator, layout::DescriptorBindingFlags,
+        allocator::StandardDescriptorSetAllocator,
+        layout::{DescriptorBindingFlags, DescriptorSetLayoutCreateFlags},
         DescriptorBufferInfo, PersistentDescriptorSet, WriteDescriptorSet,
     },
     device::{
@@ -57,6 +58,7 @@ pub fn get_device_for_rendering_on(
         khr_acceleration_structure: true,
         khr_ray_query: true,
         khr_swapchain: true,
+        khr_push_descriptor: true,
         ..DeviceExtensions::empty()
     };
     let features = Features {
@@ -68,6 +70,7 @@ pub fn get_device_for_rendering_on(
         shader_int64: true,
         shader_float64: true,
         storage_buffer8_bit_access: true,
+        uniform_and_storage_buffer8_bit_access: true,
         runtime_descriptor_array: true,
         descriptor_binding_variable_descriptor_count: true,
         ..Features::empty()
@@ -327,7 +330,7 @@ impl Renderer {
         let (swapchain, swapchain_images) = create_swapchain(device.clone(), surface.clone());
 
         let raygen_pipeline = {
-            let cs = raytrace_shader::load(device.clone())
+            let cs = raygen_shader::load(device.clone())
                 .unwrap()
                 .entry_point("main")
                 .unwrap();
@@ -337,43 +340,9 @@ impl Renderer {
             let layout = {
                 let mut layout_create_info =
                     PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
-
-                // Adjust the info for set 0, binding 1 to make it variable with texture_atlas.len() descriptors.
-                let binding = layout_create_info.set_layouts[0]
-                    .bindings
-                    .get_mut(&1)
-                    .unwrap();
-                binding.binding_flags |= DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
-                binding.descriptor_count = texture_atlas.len() as u32;
-
-                PipelineLayout::new(
-                    device.clone(),
-                    layout_create_info
-                        .into_pipeline_layout_create_info(device.clone())
-                        .unwrap(),
-                )
-                .unwrap()
-            };
-
-            ComputePipeline::new(
-                device.clone(),
-                None,
-                ComputePipelineCreateInfo::stage_layout(stage, layout),
-            )
-            .unwrap()
-        };
-
-        let raygen_pipeline = {
-            let cs = raygen_shader::load(device.clone())
-                .unwrap()
-                .entry_point("main")
-                .unwrap();
-
-            let stage = PipelineShaderStageCreateInfo::new(cs);
-
-            let layout = {
-                let layout_create_info =
-                    PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
+                // enable push descriptor for set 0
+                layout_create_info.set_layouts[0].flags |=
+                    DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR;
 
                 PipelineLayout::new(
                     device.clone(),
@@ -412,6 +381,10 @@ impl Renderer {
                 binding.binding_flags |= DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
                 binding.descriptor_count = texture_atlas.len() as u32;
 
+                // enable push descriptor for set 1
+                layout_create_info.set_layouts[1].flags |=
+                    DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR;
+
                 PipelineLayout::new(
                     device.clone(),
                     layout_create_info
@@ -438,8 +411,12 @@ impl Renderer {
             let stage = PipelineShaderStageCreateInfo::new(cs);
 
             let layout = {
-                let layout_create_info =
+                let mut layout_create_info =
                     PipelineDescriptorSetLayoutCreateInfo::from_stages(&[stage.clone()]);
+
+                // enable push descriptor for set 0
+                layout_create_info.set_layouts[0].flags |=
+                    DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR;
 
                 PipelineLayout::new(
                     device.clone(),
@@ -541,13 +518,13 @@ impl Renderer {
             self.memory_allocator.clone(),
             &self.swapchain_images,
             true,
-            4 * self.num_bounces * self.num_samples,
+            4 * (self.num_bounces+1) * self.num_samples,
         );
         self.bounce_directions = window_size_dependent_setup(
             self.memory_allocator.clone(),
             &self.swapchain_images,
             true,
-            4 * self.num_bounces * self.num_samples,
+            4 * (self.num_bounces+1) * self.num_samples,
         );
         self.bounce_emissivity = window_size_dependent_setup(
             self.memory_allocator.clone(),
@@ -656,7 +633,7 @@ impl Renderer {
             )
             .unwrap()
             .push_constants(
-                self.raytrace_pipeline.layout().clone(),
+                self.raygen_pipeline.layout().clone(),
                 0,
                 raygen_shader::PushConstants {
                     camera: raygen_shader::Camera {
@@ -807,10 +784,10 @@ impl Renderer {
                 self.accumulate_pipeline.layout().clone(),
                 0,
                 vec![
-                    WriteDescriptorSet::buffer(
-                        0,
-                        self.bounce_origins[image_index as usize].clone(),
-                    ),
+                    // WriteDescriptorSet::buffer(
+                    //     0,
+                    //     self.bounce_origins[image_index as usize].clone(),
+                    // ),
                     WriteDescriptorSet::buffer(
                         1,
                         self.bounce_directions[image_index as usize].clone(),
@@ -827,10 +804,10 @@ impl Renderer {
                         4,
                         self.bounce_ray_pdf_over_scatter_pdf[image_index as usize].clone(),
                     ),
-                    WriteDescriptorSet::buffer(
-                        5,
-                        self.bounce_debug_info[image_index as usize].clone(),
-                    ),
+                    // WriteDescriptorSet::buffer(
+                    //     5,
+                    //     self.bounce_debug_info[image_index as usize].clone(),
+                    // ),
                     WriteDescriptorSet::buffer(
                         6,
                         self.accumulate_target[image_index as usize].clone(),

@@ -32,7 +32,7 @@ layout(set = 0, binding = 5) readonly buffer InputsDebugInfo {
     vec4 input_debug_info[];
 };
 
-layout(set = 0, binding = 6) writeonly buffer OutputsImage {
+layout(set = 0, binding = 6, scalar) writeonly buffer OutputsImage {
     u8vec4 output_image[];
 };
 
