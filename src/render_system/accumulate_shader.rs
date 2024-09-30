@@ -8,19 +8,19 @@ vulkano_shaders::shader! {
 
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) readonly buffer InputOrigin {
+layout(set = 0, binding = 0, scalar) readonly buffer InputOrigin {
     vec3 input_origin[];
 };
 
-layout(set = 0, binding = 1) readonly buffer InputsDirection {
+layout(set = 0, binding = 1, scalar) readonly buffer InputsDirection {
     vec3 input_direction[];
 };
 
-layout(set = 0, binding = 2) readonly buffer InputsEmissivity {
+layout(set = 0, binding = 2, scalar) readonly buffer InputsEmissivity {
     vec3 input_emissivity[];
 };
 
-layout(set = 0, binding = 3) readonly buffer InputsReflectivity {
+layout(set = 0, binding = 3, scalar) readonly buffer InputsReflectivity {
     vec3 input_reflectivity[];
 };
 
@@ -28,11 +28,11 @@ layout(set = 0, binding = 4) readonly buffer InputsRayPdfOverScatterPdf {
     float input_ray_pdf_over_scatter_pdf[];
 };
 
-layout(set = 0, binding = 5) readonly buffer InputsDebugInfo {
+layout(set = 0, binding = 5, scalar) readonly buffer InputsDebugInfo {
     vec4 input_debug_info[];
 };
 
-layout(set = 0, binding = 6, scalar) writeonly buffer OutputsImage {
+layout(set = 0, binding = 6) writeonly buffer OutputsImage {
     u8vec4 output_image[];
 };
 

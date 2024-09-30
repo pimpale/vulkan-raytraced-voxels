@@ -160,7 +160,7 @@ fn create_swapchain(
         device.clone(),
         surface.clone(),
         SwapchainCreateInfo {
-            min_image_count: 8,
+            min_image_count: 3,
             image_format: Format::B8G8R8A8_SRGB,
             image_extent: window.inner_size().into(),
             image_usage: ImageUsage::TRANSFER_DST,
@@ -226,11 +226,11 @@ pub struct Renderer {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     swapchain: Arc<Swapchain>,
     material_descriptor_set: Arc<PersistentDescriptorSet>,
-    ray_origins: Vec<Subbuffer<[f32]>>,
-    ray_directions: Vec<Subbuffer<[f32]>>,
+    bounce_origins: Vec<Subbuffer<[f32]>>,
+    bounce_directions: Vec<Subbuffer<[f32]>>,
     bounce_emissivity: Vec<Subbuffer<[f32]>>,
     bounce_reflectivity: Vec<Subbuffer<[f32]>>,
-    bounce_terminal: Vec<Subbuffer<[u8]>>,
+    bounce_ray_pdf_over_scatter_pdf: Vec<Subbuffer<[f32]>>,
     bounce_debug_info: Vec<Subbuffer<[f32]>>,
     accumulate_target: Vec<Subbuffer<[u8]>>,
     swapchain_images: Vec<Arc<Image>>,
@@ -462,8 +462,8 @@ impl Renderer {
         .unwrap();
 
         let mut renderer = Renderer {
-            num_samples: 2,
-            num_bounces: 2,
+            num_samples: 1,
+            num_bounces: 4,
             surface,
             command_buffer_allocator,
             previous_frame_end: Some(sync::now(device.clone()).boxed()),
@@ -480,11 +480,11 @@ impl Renderer {
             material_descriptor_set,
             frame_count: 0,
             // buffers (to be created)
-            ray_origins: vec![],
-            ray_directions: vec![],
+            bounce_origins: vec![],
+            bounce_directions: vec![],
             bounce_emissivity: vec![],
             bounce_reflectivity: vec![],
-            bounce_terminal: vec![],
+            bounce_ray_pdf_over_scatter_pdf: vec![],
             bounce_debug_info: vec![],
             accumulate_target: vec![],
         };
@@ -514,17 +514,17 @@ impl Renderer {
     }
 
     pub fn create_buffers(&mut self) {
-        self.ray_origins = window_size_dependent_setup(
+        self.bounce_origins = window_size_dependent_setup(
             self.memory_allocator.clone(),
             &self.swapchain_images,
             true,
-            2 * self.num_samples,
+            3 * (self.num_bounces+1) * self.num_samples,
         );
-        self.ray_directions = window_size_dependent_setup(
+        self.bounce_directions = window_size_dependent_setup(
             self.memory_allocator.clone(),
             &self.swapchain_images,
             true,
-            3 * self.num_samples,
+            3 * (self.num_bounces+1) * self.num_samples,
         );
         self.bounce_emissivity = window_size_dependent_setup(
             self.memory_allocator.clone(),
@@ -538,7 +538,7 @@ impl Renderer {
             true,
             3 * self.num_bounces * self.num_samples,
         );
-        self.bounce_terminal = window_size_dependent_setup(
+        self.bounce_ray_pdf_over_scatter_pdf = window_size_dependent_setup(
             self.memory_allocator.clone(),
             &self.swapchain_images,
             true,
@@ -620,10 +620,13 @@ impl Renderer {
                 self.raygen_pipeline.layout().clone(),
                 0,
                 vec![
-                    WriteDescriptorSet::buffer(0, self.ray_origins[image_index as usize].clone()),
+                    WriteDescriptorSet::buffer(
+                        0,
+                        self.bounce_origins[image_index as usize].clone(),
+                    ),
                     WriteDescriptorSet::buffer(
                         1,
-                        self.ray_directions[image_index as usize].clone(),
+                        self.bounce_directions[image_index as usize].clone(),
                     ),
                 ]
                 .into(),
@@ -662,13 +665,9 @@ impl Renderer {
 
         // dispatch raytrace pipeline
         for bounce in 0..self.num_bounces {
-            let sect_sz = (self.num_samples * extent[0] * extent[1]) as u64;
-            let f32sz: u64 = 4;
+            let sect_sz =
+                (size_of::<f32>() as u32 * self.num_samples * extent[0] * extent[1]) as u64;
             let b = bounce as u64;
-
-            // ping pong between two sets of buffers
-            let pi = (bounce % 2) as u64;
-            let pi_n = ((bounce + 1) % 2) as u64;
 
             builder
                 .push_descriptor_set(
@@ -685,40 +684,40 @@ impl Renderer {
                         WriteDescriptorSet::buffer_with_range(
                             2,
                             DescriptorBufferInfo {
-                                buffer: self.ray_origins[image_index as usize]
+                                buffer: self.bounce_origins[image_index as usize]
                                     .as_bytes()
                                     .clone(),
-                                range: pi * 3 * f32sz * sect_sz..(pi + 1) * 3 * f32sz * sect_sz,
+                                range: b * 3 * sect_sz..(b + 1) * 3 * sect_sz,
                             },
                         ),
                         // input ray direction
                         WriteDescriptorSet::buffer_with_range(
                             3,
                             DescriptorBufferInfo {
-                                buffer: self.ray_directions[image_index as usize]
+                                buffer: self.bounce_directions[image_index as usize]
                                     .as_bytes()
                                     .clone(),
-                                range: pi * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                                range: b * 3 * sect_sz..(b + 1) * 3 * sect_sz,
                             },
                         ),
                         // output ray origin
                         WriteDescriptorSet::buffer_with_range(
                             4,
                             DescriptorBufferInfo {
-                                buffer: self.ray_origins[image_index as usize]
+                                buffer: self.bounce_origins[image_index as usize]
                                     .as_bytes()
                                     .clone(),
-                                range: (b + 1) * 4 * sect_sz..(b + 2) * 4 * sect_sz,
+                                range: (b + 1) * 3 * sect_sz..(b + 2) * 3 * sect_sz,
                             },
                         ),
                         // output ray direction
                         WriteDescriptorSet::buffer_with_range(
                             5,
                             DescriptorBufferInfo {
-                                buffer: self.ray_directions[image_index as usize]
+                                buffer: self.bounce_directions[image_index as usize]
                                     .as_bytes()
                                     .clone(),
-                                range: (b + 1) * 4 * sect_sz..(b + 2) * 4 * sect_sz,
+                                range: (b + 1) * 3 * sect_sz..(b + 2) * 3 * sect_sz,
                             },
                         ),
                         WriteDescriptorSet::buffer_with_range(
@@ -727,7 +726,7 @@ impl Renderer {
                                 buffer: self.bounce_emissivity[image_index as usize]
                                     .as_bytes()
                                     .clone(),
-                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                                range: b * 3 * sect_sz..(b + 1) * 3 * sect_sz,
                             },
                         ),
                         WriteDescriptorSet::buffer_with_range(
@@ -736,13 +735,13 @@ impl Renderer {
                                 buffer: self.bounce_reflectivity[image_index as usize]
                                     .as_bytes()
                                     .clone(),
-                                range: b * 4 * sect_sz..(b + 1) * 4 * sect_sz,
+                                range: b * 3 * sect_sz..(b + 1) * 3 * sect_sz,
                             },
                         ),
                         WriteDescriptorSet::buffer_with_range(
                             8,
                             DescriptorBufferInfo {
-                                buffer: self.bounce_terminal[image_index as usize]
+                                buffer: self.bounce_ray_pdf_over_scatter_pdf[image_index as usize]
                                     .as_bytes()
                                     .clone(),
                                 range: b * sect_sz..(b + 1) * sect_sz,

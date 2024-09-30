@@ -51,27 +51,27 @@ layout(set = 1, binding = 1, scalar) readonly buffer InstanceDataBuffer {
     InstanceData instance_data[];
 };
 
-layout(set = 1, binding = 2) readonly buffer InputsRayOrigin {
+layout(set = 1, binding = 2, scalar) readonly buffer InputsRayOrigin {
     vec3 input_origin[];
 };
 
-layout(set = 1, binding = 3) readonly buffer InputsRayDirection {
+layout(set = 1, binding = 3, scalar) readonly buffer InputsRayDirection {
     vec3 input_direction[];
 };
 
-layout(set = 1, binding = 4) writeonly buffer OutputsOrigin {
+layout(set = 1, binding = 4, scalar) writeonly buffer OutputsOrigin {
     vec3 output_origin[];
 };
 
-layout(set = 1, binding = 5) writeonly buffer OutputsDirection {
+layout(set = 1, binding = 5, scalar) writeonly buffer OutputsDirection {
     vec3 output_direction[];
 };
 
-layout(set = 1, binding = 6) writeonly buffer OutputsEmissivity {
+layout(set = 1, binding = 6, scalar) writeonly buffer OutputsEmissivity {
     vec3 output_emissivity[];
 };
 
-layout(set = 1, binding = 7) writeonly buffer OutputsReflectivity {
+layout(set = 1, binding = 7, scalar) writeonly buffer OutputsReflectivity {
     vec3 output_reflectivity[];
 };
 

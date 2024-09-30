@@ -7,11 +7,11 @@ vulkano_shaders::shader! {
 
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) writeonly buffer OutputsOrigin {
+layout(set = 0, binding = 0, scalar) writeonly buffer OutputsOrigin {
     vec3 output_origin[];
 };
 
-layout(set = 0, binding = 1) writeonly buffer OutputsDirection {
+layout(set = 0, binding = 1, scalar) writeonly buffer OutputsDirection {
     vec3 output_direction[];
 };
 
