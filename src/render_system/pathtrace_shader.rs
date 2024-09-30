@@ -915,8 +915,8 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 4;
-    const uint MAX_BOUNCES = 2;
+    const uint SAMPLES_PER_PIXEL = 1;
+    const uint MAX_BOUNCES = 4;
 
     void main() {
         Camera camera = push_constants.camera;
@@ -968,9 +968,9 @@ vulkano_shaders::shader! {
             for(int i = int(current_bounce)-1; i >= 0; i--) {
                 sample_color = bounce_emissivity[i] + sample_color * bounce_reflectivity[i];
             }
-            if (current_bounce > 1 && push_constants.frame % 100 > 50) {
-                sample_color = bounce_debuginfo[0];
-            }
+            // if (current_bounce > 1 && push_constants.frame % 100 > 50) {
+            //     sample_color = bounce_debuginfo[0];
+            // }
             color += sample_color;
         }
     
