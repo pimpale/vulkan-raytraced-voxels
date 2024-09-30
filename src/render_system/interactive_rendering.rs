@@ -570,21 +570,22 @@ impl Renderer {
         up: Vector3<f32>,
         samples: u32,
     ) {
-        // Do not draw frame when screen dimensions are zero.
-        // On Windows, this can occur from minimizing the application.
-        let extent = get_surface_extent(&self.surface);
-        if extent[0] == 0 || extent[1] == 0 {
-            return;
-        }
         // free memory
         self.previous_frame_end.as_mut().unwrap().cleanup_finished();
 
         // Whenever the window resizes we need to recreate everything dependent on the window size.
         // In this example that includes the swapchain, the framebuffers and the dynamic state viewport.
         if self.wdd_needs_rebuild {
-            self.rebuild(extent);
+            self.rebuild(get_surface_extent(&self.surface));
             self.wdd_needs_rebuild = false;
             println!("rebuilt swapchain");
+        }
+        
+        // Do not draw frame when screen dimensions are zero.
+        // On Windows, this can occur from minimizing the application.
+        let extent = get_surface_extent(&self.surface);
+        if extent[0] == 0 || extent[1] == 0 {
+            return;
         }
 
         // This operation returns the index of the image that we are allowed to draw upon.
