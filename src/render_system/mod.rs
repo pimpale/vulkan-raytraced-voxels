@@ -5,3 +5,4 @@ pub mod bvh;
 mod raygen_shader;
 mod raytrace_shader;
 mod accumulate_shader;
+mod nee_pdf_shader;

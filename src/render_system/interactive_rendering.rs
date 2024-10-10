@@ -230,7 +230,12 @@ pub struct Renderer {
     bounce_directions: Vec<Subbuffer<[f32]>>,
     bounce_emissivity: Vec<Subbuffer<[f32]>>,
     bounce_reflectivity: Vec<Subbuffer<[f32]>>,
-    bounce_ray_pdf_over_scatter_pdf: Vec<Subbuffer<[f32]>>,
+    // balance heuristic weight to give to nee
+    bounce_nee_mis_weight: Vec<Subbuffer<[f32]>>,
+    // the pdf of the selected ray direction only considering the bsdf
+    bounce_bsdf_pdf: Vec<Subbuffer<[f32]>>,
+    // the pdf of the selected ray direction only considering light sources
+    bounce_nee_pdf: Vec<Subbuffer<[f32]>>,
     bounce_debug_info: Vec<Subbuffer<[f32]>>,
     accumulate_target: Vec<Subbuffer<[u8]>>,
     swapchain_images: Vec<Arc<Image>>,
@@ -484,7 +489,9 @@ impl Renderer {
             bounce_directions: vec![],
             bounce_emissivity: vec![],
             bounce_reflectivity: vec![],
-            bounce_ray_pdf_over_scatter_pdf: vec![],
+            bounce_nee_mis_weight: vec![],
+            bounce_bsdf_pdf: vec![],
+            bounce_nee_pdf: vec![],
             bounce_debug_info: vec![],
             accumulate_target: vec![],
         };
@@ -538,7 +545,19 @@ impl Renderer {
             true,
             3 * self.num_bounces * self.num_samples,
         );
-        self.bounce_ray_pdf_over_scatter_pdf = window_size_dependent_setup(
+        self.bounce_nee_mis_weight = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            1 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_bsdf_pdf = window_size_dependent_setup(
+            self.memory_allocator.clone(),
+            &self.swapchain_images,
+            true,
+            1 * self.num_bounces * self.num_samples,
+        );
+        self.bounce_nee_pdf = window_size_dependent_setup(
             self.memory_allocator.clone(),
             &self.swapchain_images,
             true,
@@ -742,7 +761,7 @@ impl Renderer {
                         WriteDescriptorSet::buffer_with_range(
                             8,
                             DescriptorBufferInfo {
-                                buffer: self.bounce_ray_pdf_over_scatter_pdf[image_index as usize]
+                                buffer: self.bounce_nee_mis_weight[image_index as usize]
                                     .as_bytes()
                                     .clone(),
                                 range: b * sect_sz..(b + 1) * sect_sz,
@@ -750,6 +769,15 @@ impl Renderer {
                         ),
                         WriteDescriptorSet::buffer_with_range(
                             9,
+                            DescriptorBufferInfo {
+                                buffer: self.bounce_bsdf_pdf[image_index as usize]
+                                    .as_bytes()
+                                    .clone(),
+                                range: b * sect_sz..(b + 1) * sect_sz,
+                            },
+                        ),
+                        WriteDescriptorSet::buffer_with_range(
+                            10,
                             DescriptorBufferInfo {
                                 buffer: self.bounce_debug_info[image_index as usize]
                                     .as_bytes()
@@ -803,14 +831,22 @@ impl Renderer {
                     ),
                     WriteDescriptorSet::buffer(
                         4,
-                        self.bounce_ray_pdf_over_scatter_pdf[image_index as usize].clone(),
+                        self.bounce_nee_mis_weight[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        5,
+                        self.bounce_bsdf_pdf[image_index as usize].clone(),
+                    ),
+                    WriteDescriptorSet::buffer(
+                        6,
+                        self.bounce_nee_pdf[image_index as usize].clone(),
                     ),
                     // WriteDescriptorSet::buffer(
-                    //     5,
+                    //     7,
                     //     self.bounce_debug_info[image_index as usize].clone(),
                     // ),
                     WriteDescriptorSet::buffer(
-                        6,
+                        8,
                         self.accumulate_target[image_index as usize].clone(),
                     ),
                 ]

@@ -24,15 +24,23 @@ layout(set = 0, binding = 3, scalar) readonly buffer InputsReflectivity {
     vec3 input_reflectivity[];
 };
 
-layout(set = 0, binding = 4) readonly buffer InputsRayPdfOverScatterPdf {
-    float input_ray_pdf_over_scatter_pdf[];
+layout(set = 0, binding = 4) readonly buffer InputsNeeMisWeight {
+    float input_nee_mis_weight[];
 };
 
-layout(set = 0, binding = 5, scalar) readonly buffer InputsDebugInfo {
+layout(set = 0, binding = 5) readonly buffer InputsBsdfPdf {
+    float input_bsdf_pdf[];
+};
+
+layout(set = 0, binding = 6) readonly buffer InputsNeePdf {
+    float input_nee_pdf[];
+};
+
+layout(set = 0, binding = 7, scalar) readonly buffer InputsDebugInfo {
     vec4 input_debug_info[];
 };
 
-layout(set = 0, binding = 6) writeonly buffer OutputsImage {
+layout(set = 0, binding = 8) writeonly buffer OutputsImage {
     u8vec4 output_image[];
 };
 
@@ -60,7 +68,17 @@ void main() {
                 + gl_GlobalInvocationID.x;
             // whether the ray is valid
             float ray_valid = input_direction[bid] == vec3(0.0) ? 0.0 : 1.0;
-            sample_color = input_emissivity[bid] + sample_color * input_reflectivity[bid] * input_ray_pdf_over_scatter_pdf[bid] * ray_valid;
+
+            // compute importance sampling data
+            float bsdf_pdf = input_bsdf_pdf[bid];
+            float nee_pdf = input_nee_pdf[bid];
+            float nee_mis_weight = input_nee_mis_weight[bid];
+            // this is our sampling distribution: 
+            // mis_weight proportion of the time, we sample from the light source, and 1-mis_weight proportion of the time, we sample from the BSDF
+            float qx = nee_pdf * nee_mis_weight + (1.0 - nee_mis_weight) * bsdf_pdf;
+            float reweighting_factor = bsdf_pdf / qx;
+
+            sample_color = input_emissivity[bid] + sample_color * input_reflectivity[bid] * reweighting_factor * ray_valid;
         }
         color += sample_color;
     }

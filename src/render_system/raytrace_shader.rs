@@ -75,11 +75,15 @@ layout(set = 1, binding = 7, scalar) writeonly buffer OutputsReflectivity {
     vec3 output_reflectivity[];
 };
 
-layout(set = 1, binding = 8) writeonly buffer OutputsRayPdfOverScatterPdf {
-    float output_ray_pdf_over_scatter_pdf[];
+layout(set = 1, binding = 8) writeonly buffer OutputsNeeMisWeight {
+    float output_nee_mis_weight[];
 };
 
-layout(set = 1, binding = 9) writeonly buffer OutputsDebugInfo {
+layout(set = 1, binding = 9) writeonly buffer OutputsBsdfPdf {
+    float output_bsdf_pdf[];
+};
+
+layout(set = 1, binding = 10) writeonly buffer OutputsDebugInfo {
     vec4 output_debug_info[];
 };
 
@@ -273,91 +277,91 @@ float getVisibleTriangleArea(VisibleTriangles vt) {
     }
 }
 
-// https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/ray-triangle-intersection-geometric-solution.html
-bool rayTriangleIntersect(
-    vec3 orig, vec3 dir,
-    vec3 v0, vec3 v1, vec3 v2,
-    out float t
-)
-{
-    const float EPS = 0.0000001;
-    const float EPS2 = 0.0001;
+// // https://www.scratchapixel.com/lessons/3d-basic-rendering/ray-tracing-rendering-a-triangle/ray-triangle-intersection-geometric-solution.html
+// bool rayTriangleIntersect(
+//     vec3 orig, vec3 dir,
+//     vec3 v0, vec3 v1, vec3 v2,
+//     out float t
+// )
+// {
+//     const float EPS = 0.0000001;
+//     const float EPS2 = 0.0001;
 
 
-    // Compute the plane's normal
-    vec3 v0v1 = v1 - v0;
-    vec3 v0v2 = v2 - v0;
-    // No need to normalize
-    vec3 N = cross(v0v1, v0v2); // N
-    float area2 = length(N);
+//     // Compute the plane's normal
+//     vec3 v0v1 = v1 - v0;
+//     vec3 v0v2 = v2 - v0;
+//     // No need to normalize
+//     vec3 N = cross(v0v1, v0v2); // N
+//     float area2 = length(N);
 
-    // Step 1: Finding P
+//     // Step 1: Finding P
     
-    // Check if the ray and plane are parallel
-    float NdotRayDirection = dot(N, dir);
-    if (abs(NdotRayDirection) < EPS) // Almost 0
-        return false; // They are parallel, so they don't intersect!
+//     // Check if the ray and plane are parallel
+//     float NdotRayDirection = dot(N, dir);
+//     if (abs(NdotRayDirection) < EPS) // Almost 0
+//         return false; // They are parallel, so they don't intersect!
 
-    // Compute d parameter using equation 2
-    float d = -dot(N, v0);
+//     // Compute d parameter using equation 2
+//     float d = -dot(N, v0);
     
-    // Compute t (equation 3)
-    t = -(dot(N, orig) + d) / NdotRayDirection;
+//     // Compute t (equation 3)
+//     t = -(dot(N, orig) + d) / NdotRayDirection;
     
-    // Check if the triangle is behind the ray
-    if (t < 0) return false; // The triangle is behind
+//     // Check if the triangle is behind the ray
+//     if (t < 0) return false; // The triangle is behind
 
-    // Compute the intersection point using equation 1
-    vec3 P = orig + t * dir;
+//     // Compute the intersection point using equation 1
+//     vec3 P = orig + t * dir;
 
-    // Step 2: Inside-Outside Test
-    vec3 C; // Vector perpendicular to triangle's plane
+//     // Step 2: Inside-Outside Test
+//     vec3 C; // Vector perpendicular to triangle's plane
 
-    // Edge 0
-    vec3 edge0 = v1 - v0; 
-    vec3 vp0 = P - v0;
-    C = cross(edge0, vp0);
-    if (dot(N, C) < -EPS2) return false; // P is on the right side
+//     // Edge 0
+//     vec3 edge0 = v1 - v0; 
+//     vec3 vp0 = P - v0;
+//     C = cross(edge0, vp0);
+//     if (dot(N, C) < -EPS2) return false; // P is on the right side
 
-    // Edge 1
-    vec3 edge1 = v2 - v1; 
-    vec3 vp1 = P - v1;
-    C = cross(edge1, vp1);
-    if (dot(N, C) < -EPS2) return false; // P is on the right side
+//     // Edge 1
+//     vec3 edge1 = v2 - v1; 
+//     vec3 vp1 = P - v1;
+//     C = cross(edge1, vp1);
+//     if (dot(N, C) < -EPS2) return false; // P is on the right side
 
-    // Edge 2
-    vec3 edge2 = v0 - v2; 
-    vec3 vp2 = P - v2;
-    C = cross(edge2, vp2);
-    if (dot(N, C) < -EPS2) return false; // P is on the right side
+//     // Edge 2
+//     vec3 edge2 = v0 - v2; 
+//     vec3 vp2 = P - v2;
+//     C = cross(edge2, vp2);
+//     if (dot(N, C) < -EPS2) return false; // P is on the right side
 
-    return true; // This ray hits the triangle
-}
+//     return true; // This ray hits the triangle
+// }
 
-bool rayVisibleTriangleIntersect(
-    vec3 orig, vec3 dir,
-    VisibleTriangles vt,
-    out float t
-) {
-    if(vt.num_visible == 0) {
-        return false;
-    } else {
-        bool success = rayTriangleIntersect(
-            orig, dir,
-            vt.tri0[0], vt.tri0[1], vt.tri0[2],
-            t
-        );
-        if(!success && vt.num_visible == 2) {
-            return rayTriangleIntersect(
-                orig, dir,
-                vt.tri1[0], vt.tri1[1], vt.tri1[2],
-                t
-            );
-        } else {
-            return success;
-        }
-    }
-}
+// bool rayVisibleTriangleIntersect(
+//     vec3 orig, vec3 dir,
+//     VisibleTriangles vt,
+//     out float t
+// ) {
+//     if(vt.num_visible == 0) {
+//         return false;
+//     } else {
+//         bool success = rayTriangleIntersect(
+//             orig, dir,
+//             vt.tri0[0], vt.tri0[1], vt.tri0[2],
+//             t
+//         );
+//         if(!success && vt.num_visible == 2) {
+//             return rayTriangleIntersect(
+//                 orig, dir,
+//                 vt.tri1[0], vt.tri1[1], vt.tri1[2],
+//                 t
+//             );
+//         } else {
+//             return success;
+//         }
+//     }
+// }
 
 vec3[3] triangleTransform(mat4x3 transform, vec3[3] tri) {
     return vec3[3](
@@ -752,7 +756,8 @@ void main() {
         output_direction[bid] = direction;
         output_emissivity[bid] = vec3(0.0);
         output_reflectivity[bid] = vec3(0.0);
-        output_ray_pdf_over_scatter_pdf[bid] = 0.0;
+        output_nee_mis_weight[bid] = 0.0;
+        output_bsdf_pdf[bid] = 1.0;
         output_debug_info[bid] = vec4(0.0);
         return;
     }
@@ -765,7 +770,8 @@ void main() {
         output_direction[bid] = vec3(0.0); // no direction (miss)
         output_emissivity[bid] = vec3(5.0); // sky color
         output_reflectivity[bid] = vec3(0.0);
-        output_ray_pdf_over_scatter_pdf[bid] = 1.0;
+        output_nee_mis_weight[bid] = 0.0;
+        output_bsdf_pdf[bid] = 1.0;
         output_debug_info[bid] = vec4(0.0);
         return;
     }
@@ -807,7 +813,11 @@ void main() {
     vec4 tex1 = texture(nonuniformEXT(sampler2D(tex[t*3+1], s)), uv).rgba;
     vec4 tex2 = texture(nonuniformEXT(sampler2D(tex[t*3+2], s)), uv).rgba;
 
-    float scatter_pdf_over_ray_pdf;
+    // MIS weight for choosing the light
+    float light_pdf_mis_weight = 0.0;
+
+    // probability of choosing the ray given the BSDF
+    float bsdf_pdf;
 
     vec3 reflectivity = tex0.rgb;
     float alpha = tex0.a;
@@ -818,7 +828,7 @@ void main() {
     float scatter_kind_rand = murmur3_finalizef(murmur3_combine(seed, 0));
     if(scatter_kind_rand < metallicity) {
         // mirror scattering
-        scatter_pdf_over_ray_pdf = 1.0;
+        bsdf_pdf = 1.0;
 
         new_direction = reflect(
             direction,
@@ -826,10 +836,9 @@ void main() {
         );
     } else if (scatter_kind_rand < metallicity + (1.0-alpha)) {
         // transmissive scattering
-        scatter_pdf_over_ray_pdf = 1.0;
-
         new_direction = direction;
         reflectivity = vec3(1.0);
+        bsdf_pdf = 1.0;
     } else {
         // lambertian scattering
         reflectivity = reflectivity / M_PI;
@@ -837,14 +846,12 @@ void main() {
         // try traversing the bvh
         BvhTraverseResult result = traverseBvh(new_origin, ics.normal, murmur3_combine(seed, 2));
 
-        // MIS weight for choosing the light
-        float light_pdf_mis_weight;
+        // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
+        // otherwise, the chance is proportional to the importance of our pick
         if(result.success && result.importance > 0.0) {
             // chance of picking the light if our bvh traversal was successful
             light_pdf_mis_weight = clamp(result.importance / 10.0, 0.0, 0.5);
-        } else {
-            // we have a 0% chance of picking the light if our bvh traversal was unsuccessful
-            light_pdf_mis_weight = 0.0;
+            // light_pdf_mis_weight = 0.5;
         }
 
         // light sampling data that may or may not be valid
@@ -899,32 +906,20 @@ void main() {
         float cos_theta = dot(new_direction, ics.normal);
 
         // what is the probability of picking this ray if we treated the surface as lambertian and randomly sampled from the BRDF?
-        float scatter_pdf = cos_theta / M_PI;
+        bsdf_pdf = cos_theta / M_PI;
 
-        // compute the ray pdf for the light
-        float ray_pdf_light = 0.0;
-        if(light_pdf_mis_weight > 0.0) {
-            float t;
-            if(rayVisibleTriangleIntersect(new_origin, new_direction, vt, t)) {
-                vec3 sampled_light_point = new_origin + t*new_direction;
-                float light_area = getVisibleTriangleArea(vt);
-                float light_distance = length(sampled_light_point - new_origin);
-                // what is the probability of picking this ray if we were picking a random point on the light?
-                ray_pdf_light = light_distance*light_distance/(cos_theta*light_area);
-            }
-        }
-
-        // debuginfo.x = 1/ray_pdf_light;
-
-        // compute the ray pdf for the cosine weighted hemisphere
-        // for lambertian surfaces, the scatter pdf and the ray sampling pdf are the same
-        // see here: https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html#lightscattering/thescatteringpdf
-        float ray_pdf_hemisphere = cos_theta / M_PI;
-
-        // combine the two pdfs using MIS
-        float ray_pdf = light_pdf_mis_weight*ray_pdf_light + (1.0-light_pdf_mis_weight)*ray_pdf_hemisphere;
-
-        scatter_pdf_over_ray_pdf = scatter_pdf / ray_pdf;
+        // // compute the ray pdf for the light
+        // float ray_pdf_light = 0.0;
+        // if(light_pdf_mis_weight > 0.0) {
+        //     float t;
+        //     if(rayVisibleTriangleIntersect(new_origin, new_direction, vt, t)) {
+        //         vec3 sampled_light_point = new_origin + t*new_direction;
+        //         float light_area = getVisibleTriangleArea(vt);
+        //         float light_distance = length(sampled_light_point - new_origin);
+        //         // what is the probability of picking this ray if we were picking a random point on the light?
+        //         ray_pdf_light = light_distance*light_distance/(cos_theta*light_area);
+        //     }
+        // }
     }
 
     // compute data for this bounce
@@ -932,7 +927,8 @@ void main() {
     output_direction[bid] = new_direction;
     output_emissivity[bid] = emissivity;
     output_reflectivity[bid] = reflectivity;
-    output_ray_pdf_over_scatter_pdf[bid] = scatter_pdf_over_ray_pdf;
+    output_nee_mis_weight[bid] = light_pdf_mis_weight;
+    output_bsdf_pdf[bid] = bsdf_pdf;
     output_debug_info[bid] = vec4(0.0);
 }
 ",
