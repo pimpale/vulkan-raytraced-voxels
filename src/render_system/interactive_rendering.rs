@@ -156,7 +156,7 @@ fn create_swapchain(
         device.clone(),
         surface.clone(),
         SwapchainCreateInfo {
-            min_image_count: 8,
+            min_image_count: 3,
             image_format: Format::B8G8R8A8_SRGB,
             image_extent: window.inner_size().into(),
             image_usage: ImageUsage::TRANSFER_DST,
@@ -498,6 +498,7 @@ impl Renderer {
                         screen_size: [extent[0], extent[1]].into(),
                     },
                     frame: self.frame_count,
+                    samples,
                     tl_bvh_addr: luminance_bvh.device_address().unwrap().get(),
                 },
             )

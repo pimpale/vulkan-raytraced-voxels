@@ -1,32 +1,21 @@
 # Vulkan Raytraced Voxel Renderer
 
-Not done yet.
+Some pictures:
+
+### 8 samples per pixel, 4 bounces
+![8 samples per pixel, 4 bounces, 128x128x128 voxel grid](./assets/screenshots/8spp_800x600.png)
+
+### 128 samples per pixel, 4 bounces
+![128 samples per pixel, 4 bounces, 128x128x128 voxel grid](./assets/screenshots/128spp_800x600.png)
 
 ## How to build
 
-Before you can run the program, you need to ensure that you have installed the Vulkan libraries and headers.
+Install shaderc and the Vulkan SDK.
 
+Then:
 ```bash
-$ cd assets/shaders
-$ ./compile.sh
-$ cd ..
-$ make
-```
-
-Run from the project root directory.
-
-```bash
-$ ./obj/vulkan-triangle-v2
+cargo build --release
 ```
 
 ## How to modify image assets
 Block textures can be found in the `assets/blocks/` directory.
-These textures are in the [farbfeld](http://tools.suckless.org/farbfeld/) format.
-If you want to edit these files, you can use ImageMagick tools to convert them to png format,
-and then back again to farbfeld format once you are done editing.
-
-Example:
-```bash
-$ convert up.ff up.png
-```
-

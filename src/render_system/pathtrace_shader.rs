@@ -67,6 +67,7 @@ vulkano_shaders::shader! {
     layout(push_constant, scalar) uniform PushConstants {
         Camera camera;
         uint frame;
+        uint samples;
         uint64_t tl_bvh_addr;
     } push_constants;
 
@@ -655,7 +656,7 @@ vulkano_shaders::shader! {
         rayQueryInitializeEXT(
             ray_query,
             tlas,
-            gl_RayFlagsCullBackFacingTrianglesEXT,
+            gl_RayFlagsNoneEXT,
             0xFF,
             origin,
             t_min,
@@ -697,7 +698,7 @@ vulkano_shaders::shader! {
         vec3 debuginfo = vec3(0.0);
         
         if(info.miss) {
-            vec3 sky_emissivity = vec3(5.0);
+            vec3 sky_emissivity = vec3(50.0);
             vec3 sky_reflectivity = vec3(0.0);
             return BounceInfo(
                 sky_emissivity,
@@ -886,10 +887,11 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    const uint SAMPLES_PER_PIXEL = 4;
+    // const uint SAMPLES_PER_PIXEL = 8;
     const uint MAX_BOUNCES = 4;
 
     void main() {
+        const uint SAMPLES_PER_PIXEL = push_constants.samples;
         Camera camera = push_constants.camera;
         if(gl_GlobalInvocationID.x >= camera.screen_size.x || gl_GlobalInvocationID.y >= camera.screen_size.y) {
             return;
@@ -938,9 +940,6 @@ vulkano_shaders::shader! {
             vec3 sample_color = vec3(0.0);
             for(int i = int(current_bounce)-1; i >= 0; i--) {
                 sample_color = bounce_emissivity[i] + sample_color * bounce_reflectivity[i];
-            }
-            if (current_bounce > 1 && push_constants.frame % 100 > 50) {
-                sample_color = bounce_debuginfo[0];
             }
             color += sample_color;
         }
