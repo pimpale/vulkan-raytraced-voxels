@@ -467,7 +467,7 @@ impl Renderer {
         .unwrap();
 
         let mut renderer = Renderer {
-            num_samples: 1,
+            num_samples: 4,
             num_bounces: 4,
             surface,
             command_buffer_allocator,
