@@ -887,11 +887,10 @@ vulkano_shaders::shader! {
         return 2*vec2(screen)/vec2(screen_size) - 1.0;
     }
 
-    // const uint SAMPLES_PER_PIXEL = 8;
+    const uint SAMPLES_PER_PIXEL = 4;
     const uint MAX_BOUNCES = 4;
 
     void main() {
-        const uint SAMPLES_PER_PIXEL = push_constants.samples;
         Camera camera = push_constants.camera;
         if(gl_GlobalInvocationID.x >= camera.screen_size.x || gl_GlobalInvocationID.y >= camera.screen_size.y) {
             return;
