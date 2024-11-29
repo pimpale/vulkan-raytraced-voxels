@@ -30,7 +30,7 @@ There are two other shader: one to generate the initial wave origins and directi
 
 Currently, the wavefront version is a little faster than the megakernel version, but uses more memory.
 
-The wavefront version is in the `wavefront` branch.
+The wavefront version used for profiling is in the `wavefront_mis_only` branch, and a more advanced actively updated version is at https://github.com/pimpale/vulkan-wavefront-raytracer.
 
 #### Megakernel Profiling
 ![Megakernel Profiling](./assets/screenshots/4b_4spp_megakernel.png)
